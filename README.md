@@ -41,9 +41,9 @@ Usuários demo usam a senha `demo1234` (ex.: `rafael.demo@fortecompany.com.br` �
 2. Importe o repositório na Vercel e configure as variáveis de ambiente:
    - `DATABASE_URL` — string de conexão do Postgres
    - `AUTH_SECRET` — chave aleatória longa (`openssl rand -base64 48`)
-   - `TZ` — `America/Fortaleza`
+   - `APP_TZ` — `America/Fortaleza` (fuso horário; `TZ` é reservada na Vercel)
    - `BLOB_READ_WRITE_TOKEN` — (recomendado) crie um Blob Store em *Storage* na Vercel para anexos persistentes. Sem ele, uploads vão para o disco, que não persiste em serverless.
-3. Rode as migrações uma vez apontando para o banco de produção: `DATABASE_URL=... npm run db:migrate`
+3. As migrações rodam automaticamente no build (`npm run db:migrate && next build`). Para rodar manualmente: `DATABASE_URL=... npm run db:migrate`
 4. Acesse a URL e conclua o `/setup`.
 
 Qualquer outro host Node (Railway, Render, VPS com `npm run build && npm start`) funciona da mesma forma.
