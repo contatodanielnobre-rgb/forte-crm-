@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 245 246 248;
+  --surface: 255 255 255;
+  --surface-2: 248 249 251;
+  --line: 229 231 235;
+  --fg: 17 17 20;
+  --muted: 107 114 128;
+}
+.dark {
+  --bg: 10 10 12;
+  --surface: 20 20 24;
+  --surface-2: 28 28 34;
+  --line: 44 44 52;
+  --fg: 244 244 245;
+  --muted: 156 163 175;
+}
+html { color-scheme: light; }
+html.dark { color-scheme: dark; }
+body { @apply bg-bg text-fg antialiased; font-feature-settings: "cv02", "cv03", "cv04", "cv11"; }
+* { scrollbar-width: thin; scrollbar-color: rgb(var(--line)) transparent; }
+
+@layer components {
+  .card { @apply bg-surface border border-line rounded-2xl shadow-card; }
+  .input { @apply w-full h-10 px-3 rounded-xl bg-surface border border-line text-sm text-fg placeholder:text-muted/70 outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition disabled:opacity-60; }
+  textarea.input { @apply h-auto py-2 min-h-[84px]; }
+  select.input { @apply pr-8 appearance-none bg-no-repeat; background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' viewBox='0 0 24 24' stroke='%239ca3af' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-position: right 0.6rem center; }
+  .label { @apply block text-xs font-medium text-muted mb-1.5; }
+  .btn { @apply inline-flex items-center justify-center gap-2 h-10 px-4 rounded-xl text-sm font-medium transition active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap; }
+  .btn-primary { @apply btn bg-brand text-white hover:bg-brand-600 shadow-sm shadow-brand/30; }
+  .btn-secondary { @apply btn bg-surface border border-line text-fg hover:bg-surface-2; }
+  .btn-ghost { @apply btn text-muted hover:text-fg hover:bg-surface-2; }
+  .btn-danger { @apply btn bg-red-600/10 text-red-600 hover:bg-red-600/20; }
+  .btn-sm { @apply h-8 px-3 text-xs rounded-lg; }
+  .btn-icon { @apply h-9 w-9 p-0 rounded-xl; }
+  .badge { @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium border whitespace-nowrap; }
+  .kpi-value { @apply text-2xl font-semibold tracking-tight tabular-nums; }
+  .table { @apply w-full text-sm; }
+  .table th { @apply text-left text-[11px] uppercase tracking-wide text-muted font-medium px-4 py-3 border-b border-line; }
+  .table td { @apply px-4 py-3 border-b border-line/70 align-middle; }
+  .table tr:last-child td { @apply border-b-0; }
+  .table tbody tr { @apply hover:bg-surface-2/60 transition; }
+  .nav-item { @apply flex items-center gap-3 px-3 h-10 rounded-xl text-sm text-muted hover:text-fg hover:bg-white/5 transition; }
+  .nav-item.active { @apply bg-brand/15 text-white; }
+  .nav-item.active svg { @apply text-brand; }
+}
+.recharts-tooltip-wrapper { outline: none; }
