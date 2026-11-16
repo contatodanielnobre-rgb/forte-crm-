@@ -14,7 +14,7 @@ export async function moveLeadToStage(leadId: string, stageId: string, actorId: 
   if (!lead || !stage) throw new Error("Lead ou etapa não encontrados.");
   if (lead.stageId === stageId) return { converted: false };
 
-  const patch: Partial<typeof t.leads.$inferInsert> = { stageId, lastContactAt: new Date() };
+  const patch: Partial<typeof t.leads.$inferInsert> = { stageId, lastContactAt: new Date(), stageEnteredAt: new Date() };
   if (stage.isWon) { patch.wonAt = new Date(); patch.lostAt = null; patch.lossReasonId = null; }
   else if (stage.isLost) { patch.lostAt = new Date(); patch.wonAt = null; patch.lossReasonId = extra.lossReasonId ?? null; }
   else { patch.wonAt = null; patch.lostAt = null; patch.lossReasonId = null; }

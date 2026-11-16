@@ -19,6 +19,12 @@ export const installmentStatusEnum = pgEnum("installment_status", ["PENDENTE", "
 export const appointmentStatusEnum = pgEnum("appointment_status", ["AGENDADO", "REALIZADO", "CANCELADO", "NAO_COMPARECEU"]);
 export const taskStatusEnum = pgEnum("task_status", ["PENDENTE", "EM_ANDAMENTO", "CONCLUIDA"]);
 export const reportStatusEnum = pgEnum("report_status", ["PENDENTE", "ENTREGUE"]);
+// SALES COP AI
+export const aiPriorityEnum = pgEnum("ai_priority", ["URGENTE", "ALTA", "MEDIA", "BAIXA"]);
+export const aiPlanStatusEnum = pgEnum("ai_plan_status", ["RASCUNHO", "APROVADO", "REJEITADO", "ENCERRADO"]);
+export const aiItemStatusEnum = pgEnum("ai_item_status", ["PENDENTE", "APROVADO", "REJEITADO", "CONCLUIDO"]);
+export const aiFindingStatusEnum = pgEnum("ai_finding_status", ["ABERTO", "RESOLVIDO", "IGNORADO"]);
+export const aiSeverityEnum = pgEnum("ai_severity", ["CRITICO", "ALTO", "MEDIO", "BAIXO"]);
 
 export type Role = (typeof roleEnum.enumValues)[number];
 export type JourneyKey = (typeof journeyKeyEnum.enumValues)[number];
@@ -73,6 +79,7 @@ export const leads = pgTable("leads", {
   nextActivityAt: timestamp("next_activity_at", { withTimezone: true }),
   lastContactAt: timestamp("last_contact_at", { withTimezone: true }),
   enteredAt: timestamp("entered_at", { withTimezone: true }).notNull().defaultNow(),
+  stageEnteredAt: timestamp("stage_entered_at", { withTimezone: true }).notNull().defaultNow(), // SALES COP: tempo na etapa atual
   wonAt: timestamp("won_at", { withTimezone: true }),
   lostAt: timestamp("lost_at", { withTimezone: true }),
   archived: boolean("archived").notNull().default(false),
@@ -195,6 +202,7 @@ export const appointments = pgTable("appointments", {
   durationMin: integer("duration_min").notNull().default(60),
   link: text("link"),
   status: appointmentStatusEnum("status").notNull().default("AGENDADO"),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }), // SALES COP: confirmação da reunião
   isDemo: boolean("is_demo").notNull().default(false),
   typeId: text("type_id").references(() => appointmentTypes.id, { onDelete: "set null" }),
   ownerId: text("owner_id").references(() => users.id, { onDelete: "set null" }),
@@ -225,9 +233,14 @@ export const tasks = pgTable("tasks", {
   clientId: text("client_id").references(() => clients.id, { onDelete: "cascade" }),
   meetingId: text("meeting_id").references(() => meetings.id, { onDelete: "set null" }),
   assigneeId: text("assignee_id").references(() => users.id, { onDelete: "set null" }),
+  // SALES COP: tarefas comerciais vinculadas a lead, com prioridade e origem
+  leadId: text("lead_id").references(() => leads.id, { onDelete: "set null" }),
+  priority: aiPriorityEnum("priority").notNull().default("MEDIA"),
+  source: text("source").notNull().default("manual"), // manual | salescop
+  planItemId: text("plan_item_id"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-}, (t) => [index("tasks_client_idx").on(t.clientId), index("tasks_assignee_idx").on(t.assigneeId)]);
+}, (t) => [index("tasks_client_idx").on(t.clientId), index("tasks_assignee_idx").on(t.assigneeId), index("tasks_lead_idx").on(t.leadId)]);
 
 // ───────────── Relatórios ao cliente ─────────────
 export const reports = pgTable("reports", {
@@ -329,7 +342,137 @@ export const financeCategories = pgTable("finance_categories", {
   name: text("name").notNull().unique(),
 });
 
+// ───────────── SALES COP AI ─────────────
+/** Plano de operação diário gerado pelo agente (um por dia). */
+export const aiActionPlans = pgTable("ai_action_plans", {
+  id: id(),
+  date: text("date").notNull(), // yyyy-MM-dd
+  status: aiPlanStatusEnum("status").notNull().default("RASCUNHO"),
+  summary: text("summary"),
+  generatedBy: text("generated_by").notNull().default("regras"), // regras | ia
+  model: text("model"),
+  snapshot: jsonb("snapshot").$type<Record<string, unknown>>(),
+  createdById: text("created_by_id").references(() => users.id, { onDelete: "set null" }),
+  approvedById: text("approved_by_id").references(() => users.id, { onDelete: "set null" }),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+}, (t) => [uniqueIndex("ai_plans_date_uq").on(t.date)]);
+
+export const aiPlanItems = pgTable("ai_plan_items", {
+  id: id(),
+  planId: text("plan_id").notNull().references(() => aiActionPlans.id, { onDelete: "cascade" }),
+  order: integer("order").notNull().default(0),
+  ruleKey: text("rule_key"),
+  title: text("title").notNull(),
+  description: text("description"),
+  justification: text("justification"),
+  expectedResult: text("expected_result"),
+  priority: aiPriorityEnum("priority").notNull().default("MEDIA"),
+  recommendedTime: text("recommended_time"), // HH:mm
+  dueAt: timestamp("due_at", { withTimezone: true }),
+  status: aiItemStatusEnum("status").notNull().default("PENDENTE"),
+  assigneeId: text("assignee_id").references(() => users.id, { onDelete: "set null" }),
+  leadId: text("lead_id").references(() => leads.id, { onDelete: "set null" }),
+  clientId: text("client_id").references(() => clients.id, { onDelete: "set null" }),
+  appointmentId: text("appointment_id").references(() => appointments.id, { onDelete: "set null" }),
+  taskId: text("task_id").references(() => tasks.id, { onDelete: "set null" }),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+}, (t) => [index("ai_items_plan_idx").on(t.planId), index("ai_items_assignee_idx").on(t.assigneeId)]);
+
+/** Irregularidades, alertas e recomendações detectadas pela fiscalização. */
+export const aiFindings = pgTable("ai_findings", {
+  id: id(),
+  kind: text("kind").notNull(), // IRREGULARIDADE | ALERTA | RECOMENDACAO | GARGALO
+  ruleKey: text("rule_key").notNull(),
+  severity: aiSeverityEnum("severity").notNull().default("MEDIO"),
+  title: text("title").notNull(),
+  detail: text("detail"),
+  recommendation: text("recommendation"),
+  dedupeKey: text("dedupe_key").notNull(),
+  status: aiFindingStatusEnum("status").notNull().default("ABERTO"),
+  data: jsonb("data").$type<Record<string, unknown>>(),
+  leadId: text("lead_id").references(() => leads.id, { onDelete: "cascade" }),
+  clientId: text("client_id").references(() => clients.id, { onDelete: "cascade" }),
+  appointmentId: text("appointment_id").references(() => appointments.id, { onDelete: "cascade" }),
+  userId: text("user_id").references(() => users.id, { onDelete: "set null" }), // vendedor relacionado
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  resolvedById: text("resolved_by_id").references(() => users.id, { onDelete: "set null" }),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+}, (t) => [uniqueIndex("ai_findings_dedupe_uq").on(t.dedupeKey), index("ai_findings_status_idx").on(t.status, t.severity), index("ai_findings_user_idx").on(t.userId)]);
+
+/** Log de tudo que o agente executa (rotinas, chamadas de IA, ações, mensagens). */
+export const aiExecutionLogs = pgTable("ai_execution_logs", {
+  id: id(),
+  kind: text("kind").notNull(), // rotina | ia | acao | whatsapp | sistema
+  action: text("action").notNull(),
+  status: text("status").notNull().default("OK"), // OK | ERRO | BLOQUEADO | IGNORADO
+  summary: text("summary").notNull(),
+  input: jsonb("input"),
+  output: jsonb("output"),
+  tokensIn: integer("tokens_in"),
+  tokensOut: integer("tokens_out"),
+  durationMs: integer("duration_ms"),
+  actorId: text("actor_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: createdAt(),
+}, (t) => [index("ai_logs_created_idx").on(t.createdAt), index("ai_logs_kind_idx").on(t.kind, t.action)]);
+
+/** Relatórios inteligentes gerados (histórico). */
+export const aiReports = pgTable("ai_reports", {
+  id: id(),
+  kind: text("kind").notNull(), // diario | semanal | mensal | vendedor | conversao | produtividade | gargalos
+  title: text("title").notNull(),
+  periodFrom: timestamp("period_from", { withTimezone: true }).notNull(),
+  periodTo: timestamp("period_to", { withTimezone: true }).notNull(),
+  userId: text("user_id").references(() => users.id, { onDelete: "cascade" }), // relatório individual
+  content: jsonb("content").$type<Record<string, unknown>>().notNull(),
+  narrative: text("narrative"),
+  generatedBy: text("generated_by").notNull().default("regras"),
+  createdAt: createdAt(),
+}, (t) => [index("ai_reports_kind_idx").on(t.kind, t.createdAt)]);
+
+/** Mensagens trocadas via WhatsApp Business Cloud API. */
+export const whatsappMessages = pgTable("whatsapp_messages", {
+  id: id(),
+  direction: text("direction").notNull(), // IN | OUT
+  waId: text("wa_id").notNull(), // telefone (E.164 sem +)
+  userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
+  body: text("body"),
+  template: text("template"),
+  waMessageId: text("wa_message_id"),
+  status: text("status").notNull().default("PENDENTE"), // PENDENTE | ENVIADA | ENTREGUE | LIDA | FALHA | RECEBIDA
+  error: text("error"),
+  payload: jsonb("payload"),
+  createdAt: createdAt(),
+}, (t) => [uniqueIndex("wa_msg_id_uq").on(t.waMessageId), index("wa_user_idx").on(t.userId, t.createdAt)]);
+
 // ───────────── Relations (para db.query) ─────────────
+export const aiActionPlansRelations = relations(aiActionPlans, ({ one, many }) => ({
+  items: many(aiPlanItems),
+  createdBy: one(users, { fields: [aiActionPlans.createdById], references: [users.id] }),
+  approvedBy: one(users, { fields: [aiActionPlans.approvedById], references: [users.id] }),
+}));
+export const aiPlanItemsRelations = relations(aiPlanItems, ({ one }) => ({
+  plan: one(aiActionPlans, { fields: [aiPlanItems.planId], references: [aiActionPlans.id] }),
+  assignee: one(users, { fields: [aiPlanItems.assigneeId], references: [users.id] }),
+  lead: one(leads, { fields: [aiPlanItems.leadId], references: [leads.id] }),
+  client: one(clients, { fields: [aiPlanItems.clientId], references: [clients.id] }),
+  appointment: one(appointments, { fields: [aiPlanItems.appointmentId], references: [appointments.id] }),
+  task: one(tasks, { fields: [aiPlanItems.taskId], references: [tasks.id] }),
+}));
+export const aiFindingsRelations = relations(aiFindings, ({ one }) => ({
+  lead: one(leads, { fields: [aiFindings.leadId], references: [leads.id] }),
+  client: one(clients, { fields: [aiFindings.clientId], references: [clients.id] }),
+  appointment: one(appointments, { fields: [aiFindings.appointmentId], references: [appointments.id] }),
+  user: one(users, { fields: [aiFindings.userId], references: [users.id] }),
+}));
+export const aiExecutionLogsRelations = relations(aiExecutionLogs, ({ one }) => ({ actor: one(users, { fields: [aiExecutionLogs.actorId], references: [users.id] }) }));
+export const aiReportsRelations = relations(aiReports, ({ one }) => ({ user: one(users, { fields: [aiReports.userId], references: [users.id] }) }));
+export const whatsappMessagesRelations = relations(whatsappMessages, ({ one }) => ({ user: one(users, { fields: [whatsappMessages.userId], references: [users.id] }) }));
+
 export const usersRelations = relations(users, ({ many }) => ({
   leads: many(leads), clients: many(clients), appointments: many(appointments), tasks: many(tasks),
   points: many(pointEntries), awardGrants: many(awardGrants), notifications: many(notifications),
@@ -341,6 +484,7 @@ export const leadsRelations = relations(leads, ({ one, many }) => ({
   owner: one(users, { fields: [leads.ownerId], references: [users.id] }),
   interactions: many(interactions),
   appointments: many(appointments),
+  tasks: many(tasks),
   client: one(clients, { fields: [leads.id], references: [clients.leadId] }),
 }));
 export const pipelineStagesRelations = relations(pipelineStages, ({ many }) => ({ leads: many(leads) }));
@@ -398,6 +542,7 @@ export const tasksRelations = relations(tasks, ({ one }) => ({
   client: one(clients, { fields: [tasks.clientId], references: [clients.id] }),
   meeting: one(meetings, { fields: [tasks.meetingId], references: [meetings.id] }),
   assignee: one(users, { fields: [tasks.assigneeId], references: [users.id] }),
+  lead: one(leads, { fields: [tasks.leadId], references: [leads.id] }),
 }));
 export const reportsRelations = relations(reports, ({ one, many }) => ({
   client: one(clients, { fields: [reports.clientId], references: [clients.id] }),

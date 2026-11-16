@@ -150,6 +150,8 @@ export async function clearDemoData() {
   const demoUsers = await db.select({ id: t.users.id }).from(t.users).where(eq(t.users.isDemo, true));
   const demoClients = await db.select({ id: t.clients.id }).from(t.clients).where(eq(t.clients.isDemo, true));
   const demoLeads = await db.select({ id: t.leads.id }).from(t.leads).where(eq(t.leads.isDemo, true));
+  // SALES COP: tarefas geradas pelo agente para leads demo (a FK "set null" deixaria tarefas órfãs)
+  if (demoLeads.length) await db.delete(t.tasks).where(inArray(t.tasks.leadId, demoLeads.map((c) => c.id)));
   if (demoClients.length) await db.delete(t.clients).where(inArray(t.clients.id, demoClients.map((c) => c.id)));
   if (demoLeads.length) await db.delete(t.leads).where(inArray(t.leads.id, demoLeads.map((c) => c.id)));
   await db.delete(t.appointments).where(eq(t.appointments.isDemo, true));
