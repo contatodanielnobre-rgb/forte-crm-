@@ -2,12 +2,13 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Phone, Mail, MessageCircle, StickyNote, Video, Archive, Trash2, UserCheck, ExternalLink, Pencil, CalendarPlus } from "lucide-react";
+import { Phone, Mail, MessageCircle, StickyNote, Video, Archive, Trash2, UserCheck, ExternalLink, Pencil, CalendarPlus, ShieldCheck, Check } from "lucide-react";
 import { Drawer, Tabs, Badge, Avatar, Field, SubmitButton, ConfirmButton, Empty } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { brl, fmtDateTime, fmtDate, toInputDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { listLeadDetail, updateLead, addInteraction, scheduleActivity, archiveLead, deleteLead, moveLead } from "./actions";
+import { setTaskStatus } from "@/app/(app)/agenda/actions";
 import { LeadForm } from "./lead-form";
 import type { Stage, Option, UserOption, ApptType } from "./types";
 
@@ -48,7 +49,7 @@ export function LeadDrawer({ leadId, onClose, stages, users, sources, apptTypes,
             <div className="card p-4"><LeadForm lead={lead as never} stages={stages} users={users} sources={sources} canAssign={canAssign} currentUserId={currentUserId} action={async (fd) => { await updateLead(lead.id, fd); toast.push("Lead atualizado."); setEditing(false); await refresh(); }} /></div>
           ) : (
             <>
-              <Tabs value={tab} onChange={setTab} tabs={[{ key: "resumo", label: "Resumo" }, { key: "historico", label: "Histórico", count: lead.interactions.length }, { key: "atividades", label: "Atividades", count: lead.appointments.length }]} />
+              <Tabs value={tab} onChange={setTab} tabs={[{ key: "resumo", label: "Resumo" }, { key: "historico", label: "Histórico", count: lead.interactions.length }, { key: "atividades", label: "Atividades", count: lead.appointments.length + lead.tasks.filter((x) => x.status !== "CONCLUIDA").length }]} />
               {tab === "resumo" && (
                 <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
                   {[["Empresa", lead.company], ["Segmento", lead.segment], ["Telefone", lead.phone], ["E-mail", lead.email], ["Origem", lead.source?.name], ["Próxima atividade", lead.nextActivityAt ? fmtDateTime(lead.nextActivityAt) : null], ["Última interação", lead.lastContactAt ? fmtDateTime(lead.lastContactAt) : null], ["Motivo da perda", lead.lossReason?.name]].map(([k, v]) => (
@@ -84,6 +85,17 @@ export function LeadDrawer({ leadId, onClose, stages, users, sources, apptTypes,
                     <Field label="Link da reunião"><input name="link" className="input" placeholder="https://meet.google.com/..." /></Field>
                     <div className="sm:col-span-2 flex justify-end"><SubmitButton className="btn-primary btn-sm" pendingText="Agendando..."><CalendarPlus size={14} /> Agendar</SubmitButton></div>
                   </form>
+                  {lead.tasks.length > 0 && (
+                    <div className="card divide-y divide-line">
+                      <p className="p-3 text-xs font-semibold uppercase tracking-wide text-muted flex items-center gap-1.5"><ShieldCheck size={13} className="text-brand" /> Tarefas do SALES COP AI</p>
+                      {lead.tasks.map((x) => (
+                        <div key={x.id} className="p-3 flex items-center gap-3">
+                          <button type="button" aria-label="Concluir" className={cn("w-5 h-5 rounded-md border grid place-items-center shrink-0", x.status === "CONCLUIDA" ? "bg-emerald-500 border-emerald-500 text-white" : "border-line hover:border-brand")} onClick={async () => { try { await setTaskStatus(x.id, x.status === "CONCLUIDA" ? "PENDENTE" : "CONCLUIDA"); await refresh(); } catch (e) { toast.push((e as Error).message, "error"); } }}>{x.status === "CONCLUIDA" && <Check size={12} />}</button>
+                          <div className="flex-1 min-w-0"><p className={cn("text-sm font-medium truncate", x.status === "CONCLUIDA" && "line-through text-muted")}>{x.title}</p><p className="text-xs text-muted">{x.priority} · {x.dueAt ? `prazo ${fmtDateTime(x.dueAt)}` : "sem prazo"}{x.assignee ? ` · ${x.assignee.name}` : ""}</p></div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {lead.appointments.length === 0 ? <Empty title="Nenhuma atividade agendada" /> : (
                     <ul className="divide-y divide-line card">{lead.appointments.map((a) => (
                       <li key={a.id} className="p-3 flex items-center gap-3"><span className="w-2 h-2 rounded-full" style={{ background: a.type?.color ?? "#999" }} /><div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{a.title}</p><p className="text-xs text-muted">{fmtDateTime(a.startAt)} · {a.type?.name ?? "—"}</p></div><Badge tone={a.status === "REALIZADO" ? "green" : a.status === "CANCELADO" ? "red" : "blue"}>{a.status.replace("_", " ").toLowerCase()}</Badge></li>

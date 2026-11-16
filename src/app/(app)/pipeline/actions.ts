@@ -107,7 +107,7 @@ export async function listLeadDetail(leadId: string) {
   const user = await requirePermission("pipeline.view");
   const lead = await db.query.leads.findFirst({
     where: can(user.role, "pipeline.viewAll") ? eq(t.leads.id, leadId) : and(eq(t.leads.id, leadId), eq(t.leads.ownerId, user.id)),
-    with: { owner: { columns: { id: true, name: true, avatarUrl: true } }, source: { columns: { name: true } }, lossReason: { columns: { name: true } }, interactions: { with: { user: { columns: { name: true } } }, orderBy: (i, { desc }) => [desc(i.createdAt)] }, appointments: { orderBy: (a, { desc }) => [desc(a.startAt)], with: { type: true } }, client: { columns: { id: true } } },
+    with: { owner: { columns: { id: true, name: true, avatarUrl: true } }, source: { columns: { name: true } }, lossReason: { columns: { name: true } }, interactions: { with: { user: { columns: { name: true } } }, orderBy: (i, { desc }) => [desc(i.createdAt)] }, appointments: { orderBy: (a, { desc }) => [desc(a.startAt)], with: { type: true } }, client: { columns: { id: true } }, tasks: { orderBy: (x, { desc }) => [desc(x.createdAt)], with: { assignee: { columns: { name: true } } } } },
   });
   return lead ?? null;
 }

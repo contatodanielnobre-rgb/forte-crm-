@@ -2,7 +2,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, KanbanSquare, Users, Wallet, CalendarDays, Route, Video, BarChart3, Trophy, Settings, X } from "lucide-react";
+import { LayoutDashboard, KanbanSquare, Users, Wallet, CalendarDays, Route, Video, BarChart3, Trophy, Settings, X, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Role } from "@/db/schema";
 import { can, type Permission } from "@/lib/permissions";
@@ -17,6 +17,7 @@ export const NAV: { href: string; label: string; icon: typeof LayoutDashboard; p
   { href: "/reunioes", label: "Reuniões", icon: Video, perm: "meetings.view" },
   { href: "/relatorios", label: "Relatórios", icon: BarChart3, perm: "reports.view" },
   { href: "/ranking", label: "Ranking de Vendas", icon: Trophy, perm: "ranking.view" },
+  { href: "/sales-cop", label: "SALES COP AI", icon: ShieldCheck, perm: "salescop.view" },
   { href: "/configuracoes", label: "Configurações", icon: Settings, perm: "settings.manage" },
 ];
 
@@ -37,8 +38,9 @@ export function Sidebar({ role, open, onClose, companyName }: { role: Role; open
           {NAV.filter((n) => can(role, n.perm)).map((n) => {
             const active = path === n.href || path.startsWith(n.href + "/");
             return (
-              <Link key={n.href} href={n.href} onClick={onClose} className={cn("nav-item", active && "active")}>
-                <n.icon size={18} /> <span>{n.label}</span>
+              <Link key={n.href} href={n.href} onClick={onClose} className={cn("nav-item", active && "active", n.href === "/sales-cop" && "mt-2 border border-brand/30 bg-gradient-to-r from-brand/10 to-transparent")}>
+                <n.icon size={18} className={n.href === "/sales-cop" ? "text-brand" : undefined} /> <span className={n.href === "/sales-cop" ? "font-semibold tracking-wide text-white" : undefined}>{n.label}</span>
+                {n.href === "/sales-cop" && <span className="ml-auto text-[9px] font-bold tracking-widest text-brand">AI</span>}
               </Link>
             );
           })}

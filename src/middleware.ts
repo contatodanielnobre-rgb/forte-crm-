@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 
-const PUBLIC = ["/login", "/setup", "/api/health"];
+const PUBLIC = ["/login", "/setup", "/api/health", "/api/salescop/routine", "/api/salescop/whatsapp"]; // rotas do SALES COP são protegidas por segredo próprio (CRON_SECRET / WHATSAPP_VERIFY_TOKEN)
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   if (PUBLIC.some((p) => pathname.startsWith(p)) || pathname.startsWith("/_next") || pathname.startsWith("/brand") || pathname === "/favicon.ico") return NextResponse.next();
