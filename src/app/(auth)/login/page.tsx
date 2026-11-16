@@ -4,6 +4,7 @@ import { hasUsers } from "@/lib/bootstrap";
 import { getSession } from "@/lib/auth";
 import { LoginForm } from "./login-form";
 
+export const dynamic = "force-dynamic";
 export const metadata = { title: "Entrar" };
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
   if (!(await hasUsers())) redirect("/setup");

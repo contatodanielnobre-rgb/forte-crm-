@@ -1,6 +1,6 @@
 "use server";
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db, t } from "@/db";
 import { requireUser, requirePermission } from "@/lib/auth";
@@ -8,7 +8,7 @@ import { can } from "@/lib/permissions";
 import { audit } from "@/lib/audit";
 import { notify } from "@/lib/notify";
 import { setAppointmentStatus } from "@/lib/services/appointments";
-import { optStr, optDate, intField, fd as toObj } from "@/lib/zod";
+import { optStr, intField, fd as toObj } from "@/lib/zod";
 
 const reval = (clientId?: string | null) => { ["/agenda", "/reunioes", "/dashboard", "/ranking", "/pipeline", "/jornada"].forEach((p) => revalidatePath(p)); if (clientId) revalidatePath(`/clientes/${clientId}`); };
 
@@ -79,4 +79,3 @@ export async function setTaskStatus(taskId: string, status: "PENDENTE" | "EM_AND
   await db.update(t.tasks).set({ status, completedAt: status === "CONCLUIDA" ? new Date() : null }).where(eq(t.tasks.id, taskId));
   reval(task.clientId);
 }
-export { optDate, and };

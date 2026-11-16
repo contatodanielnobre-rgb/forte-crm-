@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { hasUsers } from "@/lib/bootstrap";
 import { SetupForm } from "./setup-form";
 
+export const dynamic = "force-dynamic";
 export const metadata = { title: "Configuração inicial" };
 export default async function SetupPage() {
   if (await hasUsers()) redirect("/login");
