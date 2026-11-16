@@ -2,6 +2,6 @@
   "buildCommand": "npm run db:migrate && next build",
   "framework": "nextjs",
   "crons": [
-    { "path": "/api/salescop/routine", "schedule": "*/15 11-21 * * 1-5" }
+    { "path": "/api/salescop/routine", "schedule": "20 11 * * *" }
   ]
 }

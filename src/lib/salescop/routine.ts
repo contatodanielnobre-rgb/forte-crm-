@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, gte } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { format, isFriday, isLastDayOfMonth, isWeekend, startOfDay } from "date-fns";
 import { db, t } from "@/db";
 import { notify, notifyManagers } from "@/lib/notify";
@@ -12,23 +12,50 @@ import { sendWhatsAppText, whatsappReady, normalizePhone } from "./whatsapp";
 import { narrate } from "./ai";
 import { logExecution } from "./log";
 
-const stepDone = async (key: RoutineStepKey, day = new Date()) => {
-  const [row] = await db.select({ id: t.aiExecutionLogs.id }).from(t.aiExecutionLogs).where(and(eq(t.aiExecutionLogs.kind, "rotina"), eq(t.aiExecutionLogs.action, `step:${key}`), gte(t.aiExecutionLogs.createdAt, startOfDay(day)))).limit(1);
-  return !!row;
+/** Máximo de tentativas por passo e por dia quando o passo falha (evita loop de erros a cada chamada do agendador). */
+const MAX_ATTEMPTS_PER_DAY = 3;
+/** Chave do lock de execução (pg_try_advisory_xact_lock) — impede duas rotinas simultâneas (ex.: Vercel Cron + agendador externo). */
+const ROUTINE_LOCK_KEY = 7_412_002;
+
+/** Situação do passo hoje: concluído com sucesso, ou quantas vezes falhou. */
+const stepState = async (key: RoutineStepKey, day = new Date()) => {
+  const rows = await db.select({ status: t.aiExecutionLogs.status }).from(t.aiExecutionLogs).where(and(eq(t.aiExecutionLogs.kind, "rotina"), eq(t.aiExecutionLogs.action, `step:${key}`), gte(t.aiExecutionLogs.createdAt, startOfDay(day))));
+  return { done: rows.some((r) => r.status === "OK"), failures: rows.filter((r) => r.status === "ERRO").length };
 };
 const timeToMin = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + (m || 0); };
 
-/** Executa a rotina: sem `step`, roda todos os passos habilitados cujo horário já passou e que ainda não rodaram hoje. */
-export async function runRoutine(opts: { step?: RoutineStepKey; force?: boolean; actorId?: string | null } = {}) {
+export type RoutineResult = { ran: { step: RoutineStepKey; status: string; summary: string }[]; skipped?: string };
+
+/**
+ * Executa a rotina: sem `step`, roda todos os passos habilitados cujo horário já passou e que ainda não rodaram hoje.
+ * Proteções: lock de execução (duas chamadas simultâneas → a segunda é ignorada), idempotência por dia (passo OK não repete)
+ * e limite de tentativas (passo com erro é retentado na próxima chamada, no máximo 3× por dia). Cada passo é isolado: a falha de um não impede os seguintes.
+ */
+export async function runRoutine(opts: { step?: RoutineStepKey; force?: boolean; actorId?: string | null } = {}): Promise<RoutineResult> {
+  return db.transaction(async (tx) => {
+    const [{ locked }] = (await tx.execute(sql`select pg_try_advisory_xact_lock(${ROUTINE_LOCK_KEY}) as locked`)) as unknown as { locked: boolean }[];
+    if (!locked) {
+      await logExecution({ kind: "rotina", action: "run", status: "IGNORADO", summary: "Rotina já em execução em outra chamada; esta foi ignorada (lock)." });
+      return { ran: [], skipped: "Rotina já em execução em outra chamada." };
+    }
+    return runRoutineLocked(opts);
+  });
+}
+
+async function runRoutineLocked(opts: { step?: RoutineStepKey; force?: boolean; actorId?: string | null }): Promise<RoutineResult> {
   const settings = await getSalesCopSettings();
   const now = new Date();
-  const results: { step: RoutineStepKey; status: string; summary: string }[] = [];
+  const results: RoutineResult["ran"] = [];
   if (!opts.step && !settings.routine.enabled) return { ran: [], skipped: "Rotina desativada nas Configurações do Agente." };
   if (!opts.step && settings.routine.weekdaysOnly && isWeekend(now)) return { ran: [], skipped: "Fim de semana (rotina configurada para dias úteis)." };
   const nowMin = now.getHours() * 60 + now.getMinutes();
   const due = ROUTINE_STEPS.filter((s) => (opts.step ? s.key === opts.step : settings.routine.steps[s.key]?.enabled && timeToMin(settings.routine.steps[s.key].time) <= nowMin));
   for (const s of due) {
-    if (!opts.force && !opts.step && (await stepDone(s.key))) continue;
+    if (!opts.force && !opts.step) {
+      const st = await stepState(s.key);
+      if (st.done) continue;
+      if (st.failures >= MAX_ATTEMPTS_PER_DAY) { results.push({ step: s.key, status: "IGNORADO", summary: `Passo falhou ${st.failures}× hoje; não será retentado até amanhã.` }); continue; }
+    }
     const started = Date.now();
     try {
       const summary = await runStep(s.key, settings, opts.actorId ?? null);
