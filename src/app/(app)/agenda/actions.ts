@@ -77,5 +77,10 @@ export async function setTaskStatus(taskId: string, status: "PENDENTE" | "EM_AND
   if (!task) throw new Error("Tarefa não encontrada.");
   if (!can(user.role, "clients.viewAll") && task.assigneeId !== user.id) throw new Error("Acesso negado.");
   await db.update(t.tasks).set({ status, completedAt: status === "CONCLUIDA" ? new Date() : null }).where(eq(t.tasks.id, taskId));
+  // FORTE CHAT: tarefa espelhada de uma atividade agendada no chat (ligação, follow-up...) → conclui lá também
+  if (task.source === "chat" && status === "CONCLUIDA") {
+    const ct = await db.query.chatScheduledTasks.findFirst({ where: eq(t.chatScheduledTasks.taskId, taskId) });
+    if (ct && ct.status === "AGENDADA" && !["ENVIAR_MENSAGEM", "ENVIAR_AUDIO", "ENVIAR_DOCUMENTO", "ENVIAR_IMAGEM"].includes(ct.type)) await db.update(t.chatScheduledTasks).set({ status: "CONCLUIDA", executedAt: new Date() }).where(eq(t.chatScheduledTasks.id, ct.id));
+  }
   reval(task.clientId);
 }

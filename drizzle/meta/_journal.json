@@ -15,6 +15,13 @@
       "when": 1794824886659,
       "tag": "0001_sales_cop_ai",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794993204440,
+      "tag": "0002_forte_chat",
+      "breakpoints": true
     }
   ]
 }

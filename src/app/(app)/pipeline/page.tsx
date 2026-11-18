@@ -34,7 +34,7 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
   return (
     <div className="h-[calc(100vh-7.5rem)] flex flex-col">
       <PageHeader title="Pipeline de Vendas" subtitle={`${leads.length} leads · ${total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} em aberto`} actions={<Filters users={users} stages={stages} canFilterSeller={viewAll} />} />
-      <Board stages={stages} leads={leads} users={users} sources={sources} lossReasons={lossReasons} apptTypes={apptTypes} canAssign={viewAll} openNew={sp.novo === "1"} currentUserId={user.id} />
+      <Board stages={stages} leads={leads} users={users} sources={sources} lossReasons={lossReasons} apptTypes={apptTypes} canAssign={viewAll} openNew={sp.novo === "1"} openLead={sp.lead ?? null} currentUserId={user.id} />
     </div>
   );
 }

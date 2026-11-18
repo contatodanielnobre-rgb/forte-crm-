@@ -449,6 +449,162 @@ export const whatsappMessages = pgTable("whatsapp_messages", {
   createdAt: createdAt(),
 }, (t) => [uniqueIndex("wa_msg_id_uq").on(t.waMessageId), index("wa_user_idx").on(t.userId, t.createdAt)]);
 
+// ───────────── FORTE CHAT ─────────────
+export const chatTaskTypeEnum = pgEnum("chat_task_type", ["ENVIAR_MENSAGEM", "ENVIAR_AUDIO", "ENVIAR_DOCUMENTO", "ENVIAR_IMAGEM", "LIGACAO", "FOLLOW_UP", "REUNIAO", "RETORNAR_CONTATO", "OUTRA"]);
+export const chatTaskStatusEnum = pgEnum("chat_task_status", ["AGENDADA", "EM_PROCESSAMENTO", "ENVIADA", "FALHOU", "CANCELADA", "CONCLUIDA", "AGUARDANDO_ENVIO_MANUAL"]);
+
+/** Etiquetas coloridas (compartilhadas por toda a empresa). */
+export const chatLabels = pgTable("chat_labels", {
+  id: id(),
+  name: text("name").notNull().unique(),
+  color: text("color").notNull().default("#6B7280"),
+  order: integer("order").notNull().default(0),
+  createdAt: createdAt(),
+});
+
+/** Etiquetas vinculadas ao cadastro do contato (lead e/ou cliente) — a mesma etiqueta aparece no chat e no CRM. */
+export const chatContactLabels = pgTable("chat_contact_labels", {
+  id: id(),
+  labelId: text("label_id").notNull().references(() => chatLabels.id, { onDelete: "cascade" }),
+  leadId: text("lead_id").references(() => leads.id, { onDelete: "cascade" }),
+  clientId: text("client_id").references(() => clients.id, { onDelete: "cascade" }),
+  conversationId: text("conversation_id").references(() => chatConversations.id, { onDelete: "cascade" }), // contato ainda não cadastrado
+  createdAt: createdAt(),
+}, (t) => [uniqueIndex("chat_cl_lead_uq").on(t.labelId, t.leadId), uniqueIndex("chat_cl_client_uq").on(t.labelId, t.clientId), uniqueIndex("chat_cl_conv_uq").on(t.labelId, t.conversationId)]);
+
+/** Uma conversa por número de WhatsApp — nunca duplica contato. Vinculada ao lead e/ou cliente. */
+export const chatConversations = pgTable("chat_conversations", {
+  id: id(),
+  waId: text("wa_id").notNull().unique(), // telefone E.164 sem "+"
+  profileName: text("profile_name"), // nome do perfil no WhatsApp
+  leadId: text("lead_id").references(() => leads.id, { onDelete: "set null" }),
+  clientId: text("client_id").references(() => clients.id, { onDelete: "set null" }),
+  assigneeId: text("assignee_id").references(() => users.id, { onDelete: "set null" }),
+  status: text("status").notNull().default("ABERTA"), // ABERTA | AGUARDANDO | RESOLVIDA
+  archived: boolean("archived").notNull().default(false),
+  unreadCount: integer("unread_count").notNull().default(0),
+  lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+  lastMessagePreview: text("last_message_preview"),
+  lastMessageDirection: text("last_message_direction"),
+  lastInboundAt: timestamp("last_inbound_at", { withTimezone: true }), // janela de atendimento de 24h
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+}, (t) => [index("chat_conv_last_idx").on(t.lastMessageAt), index("chat_conv_lead_idx").on(t.leadId), index("chat_conv_client_idx").on(t.clientId), index("chat_conv_assignee_idx").on(t.assigneeId)]);
+
+/** Favoritas são por usuário. */
+export const chatFavorites = pgTable("chat_favorites", {
+  id: id(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  conversationId: text("conversation_id").notNull().references(() => chatConversations.id, { onDelete: "cascade" }),
+  createdAt: createdAt(),
+}, (t) => [uniqueIndex("chat_fav_uq").on(t.userId, t.conversationId)]);
+
+/** Arquivos (áudios, imagens, documentos). A URL de armazenamento nunca é exposta: o acesso passa por /api/chat/media/[id]. */
+export const chatMedia = pgTable("chat_media", {
+  id: id(),
+  storageUrl: text("storage_url").notNull(),
+  storageAccess: text("storage_access").notNull().default("local"), // local | private | public
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  size: integer("size").notNull().default(0),
+  durationSec: integer("duration_sec"),
+  kind: text("kind").notNull(), // image | audio | document | video | sticker
+  waMediaId: text("wa_media_id"),
+  sha256: text("sha256"),
+  uploadedById: text("uploaded_by_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: createdAt(),
+});
+
+export const chatMessages = pgTable("chat_messages", {
+  id: id(),
+  conversationId: text("conversation_id").notNull().references(() => chatConversations.id, { onDelete: "cascade" }),
+  direction: text("direction").notNull(), // IN | OUT
+  type: text("type").notNull().default("text"), // text | image | audio | document | video | sticker | location | template | contacts | reaction | unsupported
+  body: text("body"),
+  mediaId: text("media_id").references(() => chatMedia.id, { onDelete: "set null" }),
+  replyToId: text("reply_to_id"),
+  forwardedFromId: text("forwarded_from_id"),
+  senderId: text("sender_id").references(() => users.id, { onDelete: "set null" }),
+  waMessageId: text("wa_message_id"),
+  idempotencyKey: text("idempotency_key"),
+  status: text("status").notNull().default("PENDENTE"), // PENDENTE | ENVIADA | ENTREGUE | LIDA | FALHA | RECEBIDA
+  error: text("error"),
+  template: text("template"),
+  scheduledTaskId: text("scheduled_task_id"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  deletedById: text("deleted_by_id").references(() => users.id, { onDelete: "set null" }),
+  payload: jsonb("payload"),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+  readAt: timestamp("read_at", { withTimezone: true }),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+}, (t) => [uniqueIndex("chat_msg_wa_uq").on(t.waMessageId), uniqueIndex("chat_msg_idem_uq").on(t.idempotencyKey), index("chat_msg_conv_idx").on(t.conversationId, t.createdAt), index("chat_msg_updated_idx").on(t.updatedAt)]);
+
+/** Tarefas/mensagens agendadas. Processadas no backend (/api/chat/scheduler), mesmo com o CRM fechado. */
+export const chatScheduledTasks = pgTable("chat_scheduled_tasks", {
+  id: id(),
+  title: text("title").notNull(),
+  type: chatTaskTypeEnum("type").notNull(),
+  status: chatTaskStatusEnum("status").notNull().default("AGENDADA"),
+  description: text("description"), // texto da mensagem para ENVIAR_MENSAGEM / legenda dos anexos
+  runAt: timestamp("run_at", { withTimezone: true }).notNull(),
+  recurrence: text("recurrence").notNull().default("NONE"), // NONE | DAILY | WEEKLY | MONTHLY
+  conversationId: text("conversation_id").references(() => chatConversations.id, { onDelete: "set null" }),
+  leadId: text("lead_id").references(() => leads.id, { onDelete: "set null" }),
+  clientId: text("client_id").references(() => clients.id, { onDelete: "set null" }),
+  assigneeId: text("assignee_id").references(() => users.id, { onDelete: "set null" }),
+  createdById: text("created_by_id").references(() => users.id, { onDelete: "set null" }),
+  mediaId: text("media_id").references(() => chatMedia.id, { onDelete: "set null" }),
+  taskId: text("task_id").references(() => tasks.id, { onDelete: "set null" }), // espelho na tabela tasks (agenda, SALES COP)
+  appointmentId: text("appointment_id").references(() => appointments.id, { onDelete: "set null" }),
+  attempts: integer("attempts").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull().default(3),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+  lockToken: text("lock_token"),
+  lockedAt: timestamp("locked_at", { withTimezone: true }),
+  executedAt: timestamp("executed_at", { withTimezone: true }),
+  remindedAt: timestamp("reminded_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  resultMessageId: text("result_message_id"),
+  parentId: text("parent_id"), // ocorrência anterior (recorrência)
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+}, (t) => [index("chat_tasks_due_idx").on(t.status, t.runAt), index("chat_tasks_assignee_idx").on(t.assigneeId, t.runAt), index("chat_tasks_conv_idx").on(t.conversationId)]);
+
+export const chatTaskAttempts = pgTable("chat_task_attempts", {
+  id: id(),
+  taskId: text("task_id").notNull().references(() => chatScheduledTasks.id, { onDelete: "cascade" }),
+  status: text("status").notNull(), // OK | ERRO | BLOQUEADO
+  detail: text("detail"),
+  waMessageId: text("wa_message_id"),
+  actorId: text("actor_id").references(() => users.id, { onDelete: "set null" }), // manual
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, (t) => [index("chat_attempts_task_idx").on(t.taskId)]);
+
+export const chatConversationsRelations = relations(chatConversations, ({ one, many }) => ({
+  lead: one(leads, { fields: [chatConversations.leadId], references: [leads.id] }),
+  client: one(clients, { fields: [chatConversations.clientId], references: [clients.id] }),
+  assignee: one(users, { fields: [chatConversations.assigneeId], references: [users.id] }),
+  messages: many(chatMessages),
+}));
+export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
+  conversation: one(chatConversations, { fields: [chatMessages.conversationId], references: [chatConversations.id] }),
+  media: one(chatMedia, { fields: [chatMessages.mediaId], references: [chatMedia.id] }),
+  sender: one(users, { fields: [chatMessages.senderId], references: [users.id] }),
+}));
+export const chatContactLabelsRelations = relations(chatContactLabels, ({ one }) => ({ label: one(chatLabels, { fields: [chatContactLabels.labelId], references: [chatLabels.id] }) }));
+export const chatScheduledTasksRelations = relations(chatScheduledTasks, ({ one, many }) => ({
+  conversation: one(chatConversations, { fields: [chatScheduledTasks.conversationId], references: [chatConversations.id] }),
+  lead: one(leads, { fields: [chatScheduledTasks.leadId], references: [leads.id] }),
+  client: one(clients, { fields: [chatScheduledTasks.clientId], references: [clients.id] }),
+  assignee: one(users, { fields: [chatScheduledTasks.assigneeId], references: [users.id] }),
+  media: one(chatMedia, { fields: [chatScheduledTasks.mediaId], references: [chatMedia.id] }),
+  attemptsLog: many(chatTaskAttempts),
+}));
+export const chatTaskAttemptsRelations = relations(chatTaskAttempts, ({ one }) => ({ task: one(chatScheduledTasks, { fields: [chatTaskAttempts.taskId], references: [chatScheduledTasks.id] }) }));
+
 // ───────────── Relations (para db.query) ─────────────
 export const aiActionPlansRelations = relations(aiActionPlans, ({ one, many }) => ({
   items: many(aiPlanItems),

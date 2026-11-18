@@ -25,6 +25,10 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
     db.select({ id: t.clients.id, name: t.clients.name }).from(t.clients).where(inArray(t.clients.status, ["ONBOARDING", "ATIVO", "PAUSADO"])).orderBy(asc(t.clients.name)),
     db.select({ id: t.leads.id, name: t.leads.name }).from(t.leads).where(eq(t.leads.archived, false)).orderBy(asc(t.leads.name)),
   ]);
+  // FORTE CHAT: tarefas/mensagens agendadas no chat aparecem na agenda geral
+  const ctConds = [gte(t.chatScheduledTasks.runAt, range[0]), lte(t.chatScheduledTasks.runAt, range[1]), inArray(t.chatScheduledTasks.status, ["AGENDADA", "EM_PROCESSAMENTO", "AGUARDANDO_ENVIO_MANUAL", "FALHOU", "ENVIADA", "CONCLUIDA"])];
+  if (!can(user.role, "chat.viewAll")) ctConds.push(eq(t.chatScheduledTasks.assigneeId, user.id)); else if (sp.u) ctConds.push(eq(t.chatScheduledTasks.assigneeId, sp.u));
+  const chatTasks = can(user.role, "chat.view") ? await db.query.chatScheduledTasks.findMany({ where: and(...ctConds), orderBy: [asc(t.chatScheduledTasks.runAt)], columns: { id: true, title: true, type: true, status: true, runAt: true, conversationId: true, appointmentId: true }, with: { lead: { columns: { name: true } }, client: { columns: { name: true } }, assignee: { columns: { name: true } } } }) : [];
   const prev = view === "dia" ? subDays(date, 1) : view === "semana" ? subWeeks(date, 1) : subMonths(date, 1);
   const next = view === "dia" ? addDays(date, 1) : view === "semana" ? addWeeks(date, 1) : addMonths(date, 1);
   const now = new Date();
@@ -33,7 +37,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
   return (
     <div>
       <PageHeader title="Agenda" subtitle={`${appts.length} compromissos no período${soon ? ` · ${soon} nas próximas 2h` : ""}${late ? ` · ${late} atrasados sem status` : ""}`} />
-      <Calendar view={view} date={date.toISOString()} prev={prev.toISOString()} next={next.toISOString()} appts={JSON.parse(JSON.stringify(appts))} users={users} types={types} clients={clients} leads={leads} canAssign={viewAll} currentUserId={user.id} selectedUser={sp.u ?? ""} />
+      <Calendar view={view} date={date.toISOString()} prev={prev.toISOString()} next={next.toISOString()} appts={JSON.parse(JSON.stringify(appts))} users={users} types={types} clients={clients} leads={leads} canAssign={viewAll} currentUserId={user.id} selectedUser={sp.u ?? ""} chatTasks={JSON.parse(JSON.stringify(chatTasks.filter((c) => !c.appointmentId)))} />
     </div>
   );
 }

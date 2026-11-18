@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { addDays, eachDayOfInterval, endOfMonth, endOfWeek, format, isSameDay, isSameMonth, isToday, startOfMonth, startOfWeek } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { ChevronLeft, ChevronRight, Plus, Pencil, CalendarDays } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Pencil, CalendarDays, MessageCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtTime, toInputDateTime, toInputDate } from "@/lib/format";
 import { Modal, Field, SubmitButton, Badge } from "@/components/ui";
@@ -14,7 +14,8 @@ import { createAppointment, updateAppointment } from "./actions";
 
 type A = ApptRow & { startAt: Date | string; ownerId?: string | null; clientId?: string | null; leadId?: string | null; typeId?: string | null; owner: { id: string; name: string } | null; client: { id: string; name: string } | null; lead: { id: string; name: string } | null };
 type Opt = { id: string; name: string };
-type Props = { view: "dia" | "semana" | "mes"; date: string; prev: string; next: string; appts: A[]; users: Opt[]; types: (Opt & { color: string })[]; clients: Opt[]; leads: Opt[]; canAssign: boolean; currentUserId: string; selectedUser: string };
+export type ChatTaskChip = { id: string; title: string; type: string; status: string; runAt: string; conversationId: string | null; lead: { name: string } | null; client: { name: string } | null; assignee: { name: string } | null };
+type Props = { chatTasks?: ChatTaskChip[]; view: "dia" | "semana" | "mes"; date: string; prev: string; next: string; appts: A[]; users: Opt[]; types: (Opt & { color: string })[]; clients: Opt[]; leads: Opt[]; canAssign: boolean; currentUserId: string; selectedUser: string };
 const ST_COLOR: Record<string, string> = { REALIZADO: "opacity-60", CANCELADO: "opacity-40 line-through", NAO_COMPARECEU: "opacity-50" };
 
 export function Calendar(p: Props) {
@@ -37,9 +38,9 @@ export function Calendar(p: Props) {
         <button onClick={() => openNew(new Date())} className="btn-primary btn-sm"><Plus size={14} /> Novo compromisso</button>
       </div>
 
-      {p.view === "mes" && <MonthView date={date} appts={appts} onDay={(d) => go(d.toISOString(), "dia")} onNew={openNew} onEdit={setEditing} />}
-      {p.view === "semana" && <WeekView date={date} appts={appts} onNew={openNew} onEdit={setEditing} />}
-      {p.view === "dia" && <DayView appts={appts} users={p.users} />}
+      {p.view === "mes" && <MonthView date={date} appts={appts} chat={p.chatTasks ?? []} onDay={(d) => go(d.toISOString(), "dia")} onNew={openNew} onEdit={setEditing} />}
+      {p.view === "semana" && <WeekView date={date} appts={appts} chat={p.chatTasks ?? []} onNew={openNew} onEdit={setEditing} />}
+      {p.view === "dia" && <DayView appts={appts} users={p.users} chat={p.chatTasks ?? []} />}
 
       <Modal open={!!editing} onClose={() => setEditing(null)} title={editing === "new" ? "Novo compromisso" : "Editar compromisso"} size="lg">
         {editing && <ApptForm a={editing === "new" ? null : editing} defaultDate={newDefault} {...p} onDone={() => setEditing(null)} />}
@@ -56,7 +57,16 @@ function ApptChip({ a, onEdit }: { a: A & { startAt: Date }; onEdit: (a: A) => v
   );
 }
 
-function MonthView({ date, appts, onDay, onNew, onEdit }: { date: Date; appts: (A & { startAt: Date })[]; onDay: (d: Date) => void; onNew: (d: Date) => void; onEdit: (a: A) => void }) {
+const CHAT_ST: Record<string, string> = { ENVIADA: "opacity-60", CONCLUIDA: "opacity-60", FALHOU: "text-red-500", AGUARDANDO_ENVIO_MANUAL: "text-amber-600" };
+function ChatChip({ c }: { c: ChatTaskChip }) {
+  return (
+    <Link href={c.conversationId ? `/forte-chat?c=${c.conversationId}` : "/forte-chat/tarefas"} className={cn("flex items-center gap-1 w-full min-w-0 text-left rounded-lg px-1.5 py-1 text-[11px] leading-tight border-l-2 border-gold bg-gold/10 hover:bg-gold/20 transition truncate", CHAT_ST[c.status])} title={`FORTE CHAT · ${c.title}${c.lead || c.client ? ` — ${(c.client ?? c.lead)!.name}` : ""}`}>
+      <MessageCircle size={11} className="shrink-0 text-gold" /><span className="font-medium">{fmtTime(c.runAt)}</span> <span className="truncate">{c.title}</span>
+    </Link>
+  );
+}
+
+function MonthView({ date, appts, chat, onDay, onNew, onEdit }: { date: Date; appts: (A & { startAt: Date })[]; chat: ChatTaskChip[]; onDay: (d: Date) => void; onNew: (d: Date) => void; onEdit: (a: A) => void }) {
   const days = eachDayOfInterval({ start: startOfWeek(startOfMonth(date)), end: endOfWeek(endOfMonth(date)) });
   return (
     <div className="card overflow-hidden">
@@ -65,7 +75,7 @@ function MonthView({ date, appts, onDay, onNew, onEdit }: { date: Date; appts: (
         {days.map((d) => { const list = appts.filter((a) => isSameDay(a.startAt, d)); return (
           <div key={+d} className={cn("min-h-[108px] border-b border-r border-line/70 p-1.5 group", !isSameMonth(d, date) && "bg-surface-2/40")}>
             <div className="flex items-center justify-between mb-1"><button onClick={() => onDay(d)} className={cn("w-6 h-6 rounded-full text-xs grid place-items-center hover:bg-surface-2", isToday(d) && "bg-brand text-white font-semibold")}>{format(d, "d")}</button><button onClick={() => { const n = new Date(d); n.setHours(9, 0, 0, 0); onNew(n); }} className="opacity-0 group-hover:opacity-100 text-muted hover:text-brand"><Plus size={14} /></button></div>
-            <div className="space-y-1">{list.slice(0, 3).map((a) => <ApptChip key={a.id} a={a} onEdit={onEdit} />)}{list.length > 3 && <button onClick={() => onDay(d)} className="text-[11px] text-muted hover:text-brand px-1">+{list.length - 3} mais</button>}</div>
+            <div className="space-y-1">{list.slice(0, 3).map((a) => <ApptChip key={a.id} a={a} onEdit={onEdit} />)}{chat.filter((c) => isSameDay(new Date(c.runAt), d)).slice(0, Math.max(0, 3 - list.length)).map((c) => <ChatChip key={c.id} c={c} />)}{list.length + chat.filter((c) => isSameDay(new Date(c.runAt), d)).length > 3 && <button onClick={() => onDay(d)} className="text-[11px] text-muted hover:text-brand px-1">+{list.length + chat.filter((c) => isSameDay(new Date(c.runAt), d)).length - 3} mais</button>}</div>
           </div>
         ); })}
       </div>
@@ -73,7 +83,7 @@ function MonthView({ date, appts, onDay, onNew, onEdit }: { date: Date; appts: (
   );
 }
 
-function WeekView({ date, appts, onNew, onEdit }: { date: Date; appts: (A & { startAt: Date })[]; onNew: (d: Date) => void; onEdit: (a: A) => void }) {
+function WeekView({ date, appts, chat, onNew, onEdit }: { date: Date; appts: (A & { startAt: Date })[]; chat: ChatTaskChip[]; onNew: (d: Date) => void; onEdit: (a: A) => void }) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(date), i));
   const hours = Array.from({ length: 14 }, (_, i) => 7 + i);
   return (
@@ -88,6 +98,7 @@ function WeekView({ date, appts, onNew, onEdit }: { date: Date; appts: (A & { st
             {days.map((d) => { const list = appts.filter((a) => isSameDay(a.startAt, d) && a.startAt.getHours() === h); return (
               <div key={+d} className={cn("min-h-[52px] min-w-0 overflow-hidden border-l border-line/70 p-1 space-y-1 group", isToday(d) && "bg-brand/[0.02]")} onDoubleClick={() => { const n = new Date(d); n.setHours(h, 0, 0, 0); onNew(n); }}>
                 {list.map((a) => <ApptChip key={a.id} a={a} onEdit={onEdit} />)}
+                {chat.filter((c) => isSameDay(new Date(c.runAt), d) && new Date(c.runAt).getHours() === h).map((c) => <ChatChip key={c.id} c={c} />)}
               </div>
             ); })}
           </div>
@@ -98,7 +109,13 @@ function WeekView({ date, appts, onNew, onEdit }: { date: Date; appts: (A & { st
   );
 }
 
-function DayView({ appts, users }: { appts: (A & { startAt: Date })[]; users: Opt[] }) {
+function DayView({ appts, users, chat }: { appts: (A & { startAt: Date })[]; users: Opt[]; chat: ChatTaskChip[] }) {
+  if (chat.length) return (
+    <div className="space-y-3">
+      {appts.length > 0 && <ul className="card divide-y divide-line">{appts.map((a) => <MeetingRow key={a.id} a={a} users={users} showClient />)}</ul>}
+      <div className="card p-3"><p className="text-xs font-medium text-muted mb-2 flex items-center gap-1.5"><MessageCircle size={13} className="text-gold" /> Agendado no FORTE CHAT</p><div className="space-y-1">{chat.map((c) => <div key={c.id} className="flex items-center gap-2"><div className="flex-1 min-w-0"><ChatChip c={c} /></div><span className="text-[11px] text-muted shrink-0">{c.assignee?.name}{c.lead || c.client ? ` · ${(c.client ?? c.lead)!.name}` : ""}</span></div>)}</div></div>
+    </div>
+  );
   if (!appts.length) return <div className="card p-10 text-center text-sm text-muted flex flex-col items-center gap-2"><CalendarDays size={22} /> Nenhum compromisso neste dia.</div>;
   return <ul className="card divide-y divide-line">{appts.map((a) => <MeetingRow key={a.id} a={a} users={users} showClient />)}</ul>;
 }

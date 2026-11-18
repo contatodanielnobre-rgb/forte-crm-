@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { runRoutine } from "@/lib/salescop/routine";
+import { processDueChatTasks } from "@/lib/chat/tasks";
 import type { RoutineStepKey } from "@/lib/salescop/settings";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +20,9 @@ async function handle(req: NextRequest) {
   const step = req.nextUrl.searchParams.get("step") as RoutineStepKey | null;
   const force = req.nextUrl.searchParams.get("force") === "1";
   const result = await runRoutine({ step: step ?? undefined, force });
-  return NextResponse.json({ ok: true, at: new Date().toISOString(), ...result });
+  // FORTE CHAT: aproveita o mesmo agendador para processar envios agendados (o endpoint próprio é /api/chat/scheduler)
+  const chat = await processDueChatTasks(25).catch((e) => ({ error: (e as Error).message }));
+  return NextResponse.json({ ok: true, at: new Date().toISOString(), ...result, chat });
 }
 export const GET = handle;
 export const POST = handle;

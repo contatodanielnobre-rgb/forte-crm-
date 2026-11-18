@@ -120,3 +120,27 @@ Módulo independente dentro do FORTE CRM (menu **SALES COP AI**) que **fiscaliza
 O `vercel.json` agenda **1 cron diário** (`20 11 * * *` = 08:20 em Fortaleza), compatível com o plano Hobby da Vercel: ele executa a investigação e o plano do dia. Para os sete horários (fiscalizações, parcial, oportunidades, encerramento) **sem VPS nem n8n**, cadastre um agendador externo gratuito (ex.: [cron-job.org](https://cron-job.org), GitHub Actions ou UptimeRobot) chamando a cada 15 min, em dias úteis, `https://<seu-dominio>/api/salescop/routine` com o header `Authorization: Bearer <CRON_SECRET>` (ou `x-cron-secret`). Chamadas extras são inofensivas: só rodam o que estiver pendente. `?step=plano` força um passo; `&force=1` repete um passo já executado.
 
 **WhatsApp:** os usuários são identificados pelo telefone cadastrado no perfil. Mensagens recebidas são respondidas pelo agente (com IA, ou pelas regras). Ative a integração e os avisos em *Configurações do Agente*.
+
+
+## FORTE CHAT — central de comunicação (WhatsApp) integrada ao CRM
+
+Menu **FORTE CHAT** (`/forte-chat`) + **Minhas Tarefas** (`/forte-chat/tarefas`) + **Integração e etiquetas** (`/forte-chat/configuracoes`). Módulo aditivo: não altera pipeline, financeiro, dashboard nem SALES COP — apenas os usa.
+
+| Recurso | Como funciona |
+| --- | --- |
+| Conversas | Uma conversa por número (sem duplicar contato; tolera o "9" extra dos celulares BR). Vincula automaticamente ao cliente/lead pelo telefone; números desconhecidos podem ser vinculados a um cadastro existente ou virar lead. |
+| Mensagens | Texto, emojis, imagens, PDFs/documentos, vídeo, resposta a mensagem, encaminhar (até 10 conversas), copiar, excluir (no CRM — a Cloud API não apaga no celular do contato). Enter envia, Shift+Enter quebra linha. Status enviado/entregue/lido via webhook. |
+| Áudio | Gravação real do microfone em **Ogg/Opus** (opus-recorder/WebAssembly — formato de mensagem de voz do WhatsApp), com cronômetro, pausa, cancelar, ouvir antes de enviar e excluir. |
+| Tempo real | Polling curto (3 s com a conversa aberta, 6 s na lista, 15 s com a aba oculta) — compatível com funções serverless. |
+| Agendar tarefa | 9 tipos (mensagem, áudio, documento, imagem, ligação, follow-up, reunião, retornar contato, outra), recorrência, anexo/áudio. Aparece na **Agenda**, em **Minhas Tarefas**, no painel do contato e na tabela `tasks` (SALES COP vê). Reunião cria compromisso real e aplica a automação do pipeline. |
+| Processador | `/api/chat/scheduler` (Bearer `CRON_SECRET`): trava atômica `FOR UPDATE SKIP LOCKED`, chave de idempotência por tarefa (nunca envia 2x), backoff 5/10/20 min para erros transitórios, travas órfãs resolvidas sem reenviar às cegas, lembretes no horário. Também roda junto de `/api/salescop/routine` e quando alguém usa o chat. |
+| Honestidade | Envio só vira **Enviada** com o `wamid` da Meta. Fora da janela de 24h (ou sem integração) a tarefa vira **Aguardando envio manual** com aviso ao responsável — botão "Enviar agora" depois que o contato responder, ou "Concluí por fora" (fica **Concluída**, nunca Enviada). |
+| Etiquetas | Coloridas, CRUD em Configurações; gravadas no **cadastro do lead e do cliente** (`chat_contact_labels`). |
+| Pipeline | Etapa visível e editável no painel (usa a mesma action do Kanban: permissões, motivo de perda, venda fechada → cliente). Envios, áudios, documentos, ligações, reuniões e follow-ups entram no histórico (`interactions`). |
+| Permissões | `chat.view` (todos os perfis — vê conversas que atende, dos seus leads/clientes e, se habilitado, as sem responsável), `chat.viewAll` e `chat.manage` (Admin, Gestor). Arquivos só via `/api/chat/media/[id]` com checagem de acesso. |
+
+**Banco:** migração aditiva `drizzle/0002_forte_chat.sql` — `chat_conversations`, `chat_messages`, `chat_media`, `chat_labels`, `chat_contact_labels`, `chat_favorites`, `chat_scheduled_tasks`, `chat_task_attempts`.
+
+**Webhook:** o app da Meta aceita uma URL — a já cadastrada `https://<dominio>/api/salescop/whatsapp` passou a atender os dois módulos (equipe → SALES COP; contatos → FORTE CHAT). `/api/chat/whatsapp` é equivalente. Com `WHATSAPP_APP_SECRET` a assinatura é obrigatória.
+
+**Para ativar em produção:** `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET`, `WHATSAPP_BUSINESS_ACCOUNT_ID` (modelos), `BLOB_READ_WRITE_TOKEN` (arquivos; uploads acima de 4 MB vão direto do navegador para o Blob) e `CRON_SECRET` + um agendador externo (cron-job.org) chamando `/api/chat/scheduler` a cada 1–5 min. A tela **Integração** mostra o checklist do que falta. Fotos de perfil não são disponibilizadas pela Cloud API (o chat usa iniciais).

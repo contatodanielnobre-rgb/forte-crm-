@@ -12,15 +12,15 @@ import { LeadDrawer } from "./lead-drawer";
 import { LeadForm } from "./lead-form";
 import type { Stage, LeadCard, Option, UserOption, ApptType } from "./types";
 
-type Props = { stages: Stage[]; leads: LeadCard[]; users: UserOption[]; sources: Option[]; lossReasons: Option[]; apptTypes: ApptType[]; canAssign: boolean; openNew: boolean; currentUserId: string };
+type Props = { stages: Stage[]; leads: LeadCard[]; users: UserOption[]; sources: Option[]; lossReasons: Option[]; apptTypes: ApptType[]; canAssign: boolean; openNew: boolean; openLead?: string | null; currentUserId: string };
 
-export function Board({ stages, leads: initial, users, sources, lossReasons, apptTypes, canAssign, openNew, currentUserId }: Props) {
+export function Board({ stages, leads: initial, users, sources, lossReasons, apptTypes, canAssign, openNew, openLead, currentUserId }: Props) {
   const router = useRouter();
   const toast = useToast();
   const [leads, setLeads] = React.useState(initial);
   React.useEffect(() => setLeads(initial), [initial]);
   const [active, setActive] = React.useState<LeadCard | null>(null);
-  const [selected, setSelected] = React.useState<string | null>(null);
+  const [selected, setSelected] = React.useState<string | null>(openLead ?? null);
   const [showNew, setShowNew] = React.useState(openNew);
   const [newStage, setNewStage] = React.useState<string | undefined>();
   const [lossFor, setLossFor] = React.useState<{ lead: LeadCard; stage: Stage } | null>(null);

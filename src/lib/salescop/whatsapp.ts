@@ -7,10 +7,10 @@ import type { SalesCopSettings } from "./settings";
 /**
  * Integração com a WhatsApp Business Cloud API (Meta).
  * Variáveis: WHATSAPP_TOKEN (token permanente do System User), WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_VERIFY_TOKEN (webhook),
- *            WHATSAPP_API_VERSION (opcional, padrão v21.0), WHATSAPP_TEMPLATE_DAILY (opcional: template aprovado p/ iniciar conversa).
+ *            WHATSAPP_API_VERSION (opcional, padrão v25.0), WHATSAPP_TEMPLATE_DAILY (opcional: template aprovado p/ iniciar conversa).
  * Nada é simulado: sem credenciais, o envio é bloqueado e registrado como BLOQUEADO.
  */
-const API = () => `https://graph.facebook.com/${process.env.WHATSAPP_API_VERSION || "v21.0"}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+const API = () => `https://graph.facebook.com/${process.env.WHATSAPP_API_VERSION || "v25.0"}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
 export const normalizePhone = (p?: string | null) => { const d = (p ?? "").replace(/\D/g, ""); if (!d) return ""; return d.length <= 11 ? `55${d}` : d; };
 
 export function whatsappConfigured() { return !!(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID); }
