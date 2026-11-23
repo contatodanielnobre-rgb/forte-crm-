@@ -13,7 +13,7 @@
     "db:seed": "tsx scripts/seed.ts",
     "db:studio": "drizzle-kit studio",
     "creator:migrate": "node scripts/creator-migrate.mjs",
-    "creator:build": "npm --prefix creator ci && npm --prefix creator run build"
+    "creator:build": "npm --prefix creator ci --include=dev && npm --prefix creator run build"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
