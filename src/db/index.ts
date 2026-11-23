@@ -9,6 +9,7 @@ const conn =
   postgres(process.env.DATABASE_URL!, {
     max: process.env.NODE_ENV === "production" ? 5 : 10,
     prepare: false, // compatível com pgBouncer / Supabase pooler
+    max_pipeline: 1, // o pooler em modo transação (Supavisor) trava com consultas encadeadas na mesma conexão
     idle_timeout: 20,
   });
 if (process.env.NODE_ENV !== "production") globalForDb.conn = conn;

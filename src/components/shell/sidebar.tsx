@@ -2,7 +2,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, KanbanSquare, Users, Wallet, CalendarDays, Route, Video, BarChart3, Trophy, Settings, X, ShieldCheck, MessageCircle, ListChecks } from "lucide-react";
+import { LayoutDashboard, KanbanSquare, Users, Wallet, CalendarDays, Route, Video, BarChart3, Trophy, Settings, X, ShieldCheck, MessageCircle, ListChecks, Wand2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Role } from "@/db/schema";
 import { can, type Permission } from "@/lib/permissions";
@@ -20,6 +20,7 @@ export const NAV: { href: string; label: string; icon: typeof LayoutDashboard; p
   { href: "/relatorios", label: "Relatórios", icon: BarChart3, perm: "reports.view" },
   { href: "/ranking", label: "Ranking de Vendas", icon: Trophy, perm: "ranking.view" },
   { href: "/sales-cop", label: "SALES COP AI", icon: ShieldCheck, perm: "salescop.view" },
+  { href: "/criador", label: "Criador de Conteúdo", icon: Wand2, perm: "creator.use" },
   { href: "/configuracoes", label: "Configurações", icon: Settings, perm: "settings.manage" },
 ];
 

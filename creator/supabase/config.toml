@@ -1,0 +1,7 @@
+project_id = "forte-company-admin"
+
+[functions.studio-generate]
+verify_jwt = true
+
+[functions.studio-keys]
+verify_jwt = true

@@ -4,3 +4,10 @@ node_modules
 uploads/*
 !uploads/.gitkeep
 *.tsbuildinfo
+
+# Criador de Conteúdo (sub-app): dependências e build
+creator/node_modules
+creator/.env.local
+public/creator
+dev.log
+.vercel

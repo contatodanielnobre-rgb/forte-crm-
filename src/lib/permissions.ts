@@ -9,11 +9,13 @@ export type Permission =
   // SALES COP AI: view = acessa o módulo (Comercial vê só o próprio recorte); manage = aprova planos, resolve irregularidades, roda análises; settings = configura o agente
   | "salescop.view" | "salescop.manage" | "salescop.settings"
   // FORTE CHAT: view = usa o chat (só conversas autorizadas); viewAll = vê/atribui todas as conversas; manage = etiquetas e configurações do chat
-  | "chat.view" | "chat.viewAll" | "chat.manage";
+  | "chat.view" | "chat.viewAll" | "chat.manage"
+  // CRIADOR DE CONTEÚDO (IA): carrosséis, logos, thumbnails e vídeos. Só gestão usa (gasta créditos de IA).
+  | "creator.use";
 
 const MATRIX: Record<Role, Permission[]> = {
-  ADMIN: ["dashboard.view", "pipeline.view", "pipeline.manage", "pipeline.viewAll", "clients.view", "clients.viewAll", "clients.manage", "finance.view", "finance.manage", "agenda.view", "journey.manage", "meetings.view", "reports.view", "ranking.view", "settings.manage", "users.manage", "goals.manage", "scoring.manage", "awards.manage", "demo.manage", "salescop.view", "salescop.manage", "salescop.settings", "chat.view", "chat.viewAll", "chat.manage"],
-  GESTOR: ["dashboard.view", "pipeline.view", "pipeline.manage", "pipeline.viewAll", "clients.view", "clients.viewAll", "clients.manage", "finance.view", "agenda.view", "journey.manage", "meetings.view", "reports.view", "ranking.view", "salescop.view", "salescop.manage", "chat.view", "chat.viewAll", "chat.manage"],
+  ADMIN: ["creator.use", "dashboard.view", "pipeline.view", "pipeline.manage", "pipeline.viewAll", "clients.view", "clients.viewAll", "clients.manage", "finance.view", "finance.manage", "agenda.view", "journey.manage", "meetings.view", "reports.view", "ranking.view", "settings.manage", "users.manage", "goals.manage", "scoring.manage", "awards.manage", "demo.manage", "salescop.view", "salescop.manage", "salescop.settings", "chat.view", "chat.viewAll", "chat.manage"],
+  GESTOR: ["creator.use", "dashboard.view", "pipeline.view", "pipeline.manage", "pipeline.viewAll", "clients.view", "clients.viewAll", "clients.manage", "finance.view", "agenda.view", "journey.manage", "meetings.view", "reports.view", "ranking.view", "salescop.view", "salescop.manage", "chat.view", "chat.viewAll", "chat.manage"],
   COMERCIAL: ["dashboard.view", "pipeline.view", "pipeline.manage", "clients.view", "agenda.view", "meetings.view", "ranking.view", "salescop.view", "chat.view"],
   OPERACIONAL: ["dashboard.view", "clients.view", "agenda.view", "journey.manage", "meetings.view", "ranking.view", "chat.view"],
 };
