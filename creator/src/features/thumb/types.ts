@@ -14,7 +14,8 @@ export interface ThumbForm {
 
 export interface ThumbConcept {
   index?: number; name: string; angle: string; category: string; hook: string; composition: string
-  characters: { who: string; placement: string; expression: string; pose: string; outfit: string; gaze?: string }[]
+  characters: { who: string; placement: string; expression: string; pose: string; outfit: string; gaze?: string; framing?: string; angle?: string }[]
+  subjects?: { who: string; how: string }[]; palette_from?: string; refs?: { n: number; id?: string; take: string }[]
   scene: string; elements: string[]; colors: string[]; objects?: string; skeleton?: string
   text: { mode: 'none' | 'short'; headline: string; sub: string; placement: string; style: string; style_id?: string; font_hint?: string; look?: string; container?: string; integration?: string }
   text_reason: string; image_brief: string

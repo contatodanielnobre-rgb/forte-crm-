@@ -13,7 +13,7 @@ import { StudioImg } from '@/features/studio/ui'
 import type { Brand } from '@/features/studio/types'
 import FontPicker from '@/features/studio/FontPicker'
 import { THUMB_CATEGORIES, THUMB_LETTERING, THUMB_TYPE_GUIDE } from '../../../supabase/functions/_shared/thumb-skill'
-import { approveThumb, createThumbProject, deleteThumbProject, deleteThumbVersion, downloadThumb, generateThumbImages, ideateThumbs, invalidateThumb, refineThumb, retryThumb, saveConcept, toggleFavoriteThumb, useThumbProjects, useThumbVersions, type NewInput } from './data'
+import { useRefThumbs, approveThumb, createThumbProject, deleteThumbProject, deleteThumbVersion, downloadThumb, generateThumbImages, ideateThumbs, invalidateThumb, refineThumb, retryThumb, saveConcept, toggleFavoriteThumb, useThumbProjects, useThumbVersions, type NewInput } from './data'
 import { emptyDirection, type CastRole, type CastShow, type InputRole, type ThumbConcept, type ThumbDirection, type ThumbForm, type ThumbProject, type ThumbVersion } from './types'
 
 const emptyForm = (): ThumbForm => ({ title: '', brief: '', categories: [], cast: [], text_mode: 'auto', text_custom: '', lang: 'português do Brasil', notes: '', avoid: '', count: 6, dir: emptyDirection() })
@@ -130,6 +130,7 @@ function NewThumbForm({ brand, initial, onCreated, trained }: { brand: Brand; in
       <div>
         <p className="label">3 · Quem aparece</p>
         <CastSection brand={brand} kind="character" postIds={castIds} setPostIds={setCastIds} openaiOk={hasProvider(providers, 'openai')} mentioned={[]} />
+        <p className="mt-2 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] text-emerald-900" data-testid="cast-face-note">A foto do personagem serve <b>só para o rosto</b>: o sistema recorta o rosto sozinho e cria pose, roupa, ângulo e expressão <b>novos para cada vídeo</b> (ex.: capacete de soldado numa thumb de guerra, terno de época numa de política). Nunca copia a roupa nem os braços cruzados da foto.</p>
         {picked.length > 0 && (
           <ul className="mt-3 space-y-2" data-testid="thumb-cast-cfg">
             {picked.map((a) => (
@@ -260,7 +261,11 @@ function IdeaCard({ v, checked, onCheck, onSave }: { v: ThumbVersion; checked: b
           <p className="mt-1.5 text-xs text-zinc-700"><b>Por que clica:</b> {c.hook}</p>
           <p className="mt-1 text-xs text-zinc-600"><b>Composição:</b> {c.composition}</p>
           {c.characters?.length > 0 && <p className="mt-1 text-xs text-zinc-600"><b>Personagens:</b> {c.characters.map((x) => `${x.who}${x.expression ? ` (${x.expression})` : ''}`).join(' · ')}</p>}
+          {c.characters?.some((x) => x.framing || x.outfit) && <p className="mt-1 text-xs text-zinc-600"><b>Figurino e pose:</b> {c.characters.filter((x) => x.outfit || x.framing).map((x) => [x.framing, x.angle, x.outfit].filter(Boolean).join(' · ')).join(' || ')}</p>}
+          {c.subjects && c.subjects.length > 0 && <p className="mt-1 text-xs text-zinc-600"><b>Assunto em destaque:</b> {c.subjects.map((x) => `${x.who} (${x.how})`).join(' · ')}</p>}
           <p className="mt-1 text-xs text-zinc-600"><b>Cenário:</b> {c.scene}</p>
+          {c.refs && c.refs.length > 0 && <RefStrip refs={c.refs} />}
+          {c.palette_from && <p className="mt-1 text-[11px] text-zinc-500"><b>Paleta:</b> {c.palette_from}</p>}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {c.colors?.map((x) => <span key={x} className="h-4 w-4 rounded ring-1 ring-black/10" style={{ background: x }} title={x} />)}
             <label className="ml-auto flex min-w-[220px] flex-1 items-center gap-2 text-xs"><span className="font-semibold text-zinc-600">Texto</span><input className="input h-8 text-xs" value={text} onChange={(e) => setText(e.target.value)} onBlur={commit} placeholder="(sem texto)" aria-label="Texto da thumbnail" data-testid="idea-text" /></label>
@@ -269,6 +274,23 @@ function IdeaCard({ v, checked, onCheck, onSave }: { v: ThumbVersion; checked: b
         </div>
       </div>
     </article>
+  )
+}
+
+/** Mostra quais thumbnails do TREINO a IA usou como referência neste conceito (e o que ela copia de cada uma) */
+function RefStrip({ refs }: { refs: NonNullable<ThumbConcept['refs']> }) {
+  const ids = refs.map((r) => r.id).filter(Boolean) as string[]
+  const { data } = useRefThumbs(ids)
+  if (!data?.length) return null
+  return (
+    <div className="mt-2" data-testid="idea-refs">
+      <p className="mb-1 text-[11px] font-semibold text-zinc-600">Referências do seu treino usadas nesta ideia</p>
+      <div className="flex flex-wrap gap-2">
+        {refs.map((r) => { const a = data.find((x) => x.id === r.id); return a ? (
+          <div key={r.id} className="w-28" title={r.take}><StudioImg path={a.thumb_path ?? a.storage_path} className="aspect-video rounded-lg" /><p className="mt-0.5 line-clamp-2 text-[10px] leading-tight text-zinc-500">{r.take}</p></div>
+        ) : null })}
+      </div>
+    </div>
   )
 }
 

@@ -5,6 +5,7 @@ import { slugFileName } from '@/lib/utils'
 import { BUCKET_STUDIO } from '@/features/studio/catalog'
 import { studioGenerate } from '@/features/studio/data'
 import type { Brand, StudioAsset } from '@/features/studio/types'
+import { renderSpecimen } from './specimen'
 import type { InputRole, ThumbAnalysis, ThumbConcept, ThumbForm, ThumbInput, ThumbProject, ThumbVersion } from './types'
 
 const busy = (s?: string) => s === 'queued' || s === 'running'
@@ -21,6 +22,13 @@ export const useThumbVersions = (projectId?: string | null) => useQuery({
   enabled: !!projectId,
   queryFn: async () => must(await supabase.from('thumb_versions').select('*').eq('project_id', projectId!).order('created_at', { ascending: true })) as ThumbVersion[],
   refetchInterval: (q) => ((q.state.data as ThumbVersion[] | undefined)?.some((v) => busy(v.status)) ? 2000 : false),
+})
+
+/** Miniaturas das thumbnails de treino que a IA escolheu como referência de um conceito */
+export const useRefThumbs = (ids: string[]) => useQuery({
+  queryKey: ['thumb', 'refthumbs', ids.join(',')],
+  enabled: ids.length > 0,
+  queryFn: async () => must(await supabase.from('studio_assets').select('id, storage_path, thumb_path').in('id', ids)) as { id: string; storage_path: string; thumb_path: string | null }[],
 })
 
 export const invalidateThumb = (qc: QueryClient, ...parts: string[]) => qc.invalidateQueries({ queryKey: ['thumb', ...parts] })
@@ -98,8 +106,24 @@ export async function ideateThumbs(project: ThumbProject, count: number, qc: Que
   return { rows, analysis: r.analysis }
 }
 
-async function runVersion(v: ThumbVersion, modelId: string | null, quality: string) {
-  try { await studioGenerate({ action: 'thumb_image', version_id: v.id, model_id: modelId, quality }) }
+/** Amostra das letras na fonte REAL do título (vai como imagem de referência para o gerador copiar o desenho das letras) */
+async function specimenFor(project: ThumbProject, v: ThumbVersion): Promise<string | undefined> {
+  const t = v.concept?.text
+  if (!t || t.mode !== 'short' || !t.headline) return undefined
+  const font = project.form.dir?.text_font || t.font_hint
+  if (!font) return undefined
+  try {
+    const blob = await renderSpecimen(t.headline, font)
+    if (!blob) return undefined
+    const path = `${v.brand_id}/thumbs/${v.project_id}/spec-${v.id}.png`
+    await uploadWithProgress(path, blob, undefined, BUCKET_STUDIO)
+    return path
+  } catch { return undefined }
+}
+
+async function runVersion(project: ThumbProject, v: ThumbVersion) {
+  const modelId = project.model_id, quality = project.quality
+  try { await studioGenerate({ action: 'thumb_image', version_id: v.id, model_id: modelId, quality, specimen_path: v.parent_id ? undefined : await specimenFor(project, v) }) }
   catch (e) {
     const msg = (e instanceof Error ? e.message : String(e)).slice(0, 500)
     await supabase.from('thumb_versions').update({ status: 'error', error: msg }).eq('id', v.id).neq('status', 'done')
@@ -115,7 +139,7 @@ export async function generateThumbImages(project: ThumbProject, versions: Thumb
   for (const v of versions) await supabase.from('thumb_versions').update({ status: 'queued', error: null }).eq('id', v.id)
   await supabase.from('thumb_projects').update({ status: 'generating' }).eq('id', project.id)
   invalidateThumb(qc, 'versions', project.id)
-  await pool(versions, 2, async (v) => { await runVersion(v, project.model_id, project.quality); invalidateThumb(qc, 'versions', project.id) })
+  await pool(versions, 2, async (v) => { await runVersion(project, v); invalidateThumb(qc, 'versions', project.id) })
   invalidateThumb(qc, 'versions', project.id); invalidateThumb(qc, 'projects')
 }
 
@@ -126,14 +150,14 @@ export async function refineThumb(project: ThumbProject, from: ThumbVersion, fee
     concept: { ...from.concept, name: `${from.concept.name} · ajuste` }, feedback, status: 'queued',
   }).select('*').single()) as ThumbVersion
   invalidateThumb(qc, 'versions', project.id)
-  await runVersion(row, project.model_id, project.quality)
+  await runVersion(project, row)
   invalidateThumb(qc, 'versions', project.id)
 }
 
 export async function retryThumb(project: ThumbProject, v: ThumbVersion, qc: QueryClient) {
   await supabase.from('thumb_versions').update({ status: 'queued', error: null }).eq('id', v.id)
   invalidateThumb(qc, 'versions', project.id)
-  await runVersion(v, project.model_id, project.quality)
+  await runVersion(project, v)
   invalidateThumb(qc, 'versions', project.id)
 }
 

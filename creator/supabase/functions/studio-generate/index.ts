@@ -25,7 +25,7 @@ import { openaiImage, costFromUsage as usageCost } from "../_shared/openai-image
 import { DESCRIBE_SYSTEM, describePrompt, isCast, selectImageRefs, transcribeAudio, vocabularyPrompt, type Attachment, type CastItem, type CompetitorPlan, type LogoPlan } from "../_shared/elements.ts";
 import { ANALYZE_SYSTEM, sanitizePlan, sanitizeStyle, videoPlanSystem, videoPlanUser, type VideoPlanInput } from "../_shared/video.ts";
 import { brandImportIntro, brandImportSystem, filterImportColors } from "../_shared/import.ts";
-import { THUMB_CATEGORIES, THUMB_OBSERVE_SYSTEM, THUMB_SYNTH_SYSTEM, buildThumbPrompt, buildThumbRefinePrompt, compileThumbSkill, computeThumbStats, exemplarsBlock, learnedBlock, sanitizeObservations, sanitizeThumbAnalysis, sanitizeThumbConcepts, sanitizeThumbForm, thumbIdeateSystem, thumbIdeateUser, thumbObservePrompt, thumbSynthUser, type ThumbAnalysis, type ThumbAttach, type ThumbConcept, type ThumbObs } from "../_shared/thumb.ts";
+import { THUMB_CATEGORIES, THUMB_OBSERVE_SYSTEM, THUMB_SYNTH_SYSTEM, buildThumbPrompt, buildThumbRefinePrompt, compileThumbSkill, computeThumbStats, exemplarsBlock, learnedBlock, pickRefCandidates, recentBlock, sanitizeObservations, sanitizeThumbAnalysis, sanitizeThumbConcepts, sanitizeThumbForm, thumbIdeateSystem, thumbIdeateUser, thumbObservePrompt, thumbSynthUser, type ThumbAnalysis, type ThumbAttach, type ThumbConcept, type ThumbObs } from "../_shared/thumb.ts";
 import { LOGO_INSPECT_PROMPT, LOGO_INSPECT_SYSTEM, LOGO_TRAIN_PROMPT, LOGO_TRAIN_SYSTEM, brandingPlanSystem, brandingPlanUser, buildLogoPrompt, buildLogoRefinePrompt, buildMockupPrompt, compileLogoSkill, defaultScenes, logoIdeateSystem, logoIdeateUser, sanitizeConcepts, sanitizeForm, sanitizeInspect, sanitizeLogoAnalysis, sanitizeScenes, type LogoAnalysis, type LogoAttach } from "../_shared/logo.ts";
 
 import { LAYOUT_ANALYZE_SYSTEM, LAYOUT_CATEGORIES, LAYOUT_OBSERVE_SYSTEM, LAYOUT_SYNTH_SYSTEM, buildMascotPrompt, buildSectionPrompt, buildSectionRefinePrompt, buildSystemBoardPrompt, compileLayoutSkill, computeLayoutStats, layoutAnalyzePrompt, layoutExemplarsBlock, layoutLearnedBlock, layoutObservePrompt, layoutPlanSystem, layoutPlanUser, layoutSynthUser, sanitizeLayoutAnalysis, sanitizeLayoutForm, sanitizeLayoutPlan, sanitizeLayoutSiteAnalysis, sanitizeSiteObs, type LayoutAnalysis, type LayoutAttach, type LayoutObs, type LayoutPagePlan, type LayoutPlan, type LayoutSectionPlan, type LayoutSiteAnalysis } from "../_shared/layout.ts";
@@ -550,17 +550,50 @@ async function transcribe(ctx: Ctx, body: Record<string, unknown>) {
 }
 
 // ---------- personagem/objeto: descrição por IA de visão ----------
+/** Recorta a cabeça (cabelo, orelhas, queixo, pescoço) para usar como referência de IDENTIDADE: o gerador deixa de copiar pose, roupa e acessórios da foto. */
+async function cropFace(bytes: Uint8Array, box: { x: number; y: number; w: number; h: number }): Promise<Uint8Array | null> {
+  try {
+    const { Image } = await import("https://deno.land/x/imagescript@1.3.0/mod.ts");
+    const img = await Image.decode(bytes);
+    const pad = 0.12;
+    let x = Math.max(0, (box.x - box.w * pad) * img.width), y = Math.max(0, (box.y - box.h * pad) * img.height);
+    let w = Math.min(img.width - x, box.w * (1 + 2 * pad) * img.width), h = Math.min(img.height - y, box.h * (1 + 2 * pad) * img.height);
+    if (w < 64 || h < 64) return null;
+    x = Math.round(x); y = Math.round(y); w = Math.round(w); h = Math.round(h);
+    let out = img.crop(x, y, w, h);
+    const m = Math.max(out.width, out.height);
+    if (m > 1024) out = out.resize(Math.round(out.width * 1024 / m), Math.round(out.height * 1024 / m));
+    return await out.encode();
+  } catch (_) { return null; }
+}
+const num01 = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : NaN; };
+
 async function describeAsset(ctx: Ctx, body: Record<string, unknown>) {
   const { key, model } = await textKey(ctx);
-  const { data: a } = await ctx.asCaller.from("studio_assets").select("id, kind, label, storage_path, thumb_path").eq("id", String(body.asset_id ?? "")).single();
+  const { data: a } = await ctx.asCaller.from("studio_assets").select("id, kind, label, brand_id, storage_path, thumb_path, meta").eq("id", String(body.asset_id ?? "")).single();
   if (!a || !isCast(a.kind)) throw new Fail("Personagem/objeto não encontrado.", 404);
-  const ref = await download(ctx, a.thumb_path ?? a.storage_path);
+  const ref = await download(ctx, a.kind === "character" ? a.storage_path : (a.thumb_path ?? a.storage_path));
   const content = [{ type: "text", text: describePrompt(a.kind, a.label) }, { type: "image_url", image_url: { url: `data:${ref.mime};base64,${bytesToB64(ref.bytes)}`, detail: "high" } }];
   const p = JSON.parse(await chat(key, model, DESCRIBE_SYSTEM, content, true));
   const description = String(p.description ?? "").trim();
   if (!description) throw new Fail("A IA não conseguiu descrever a imagem.", 502);
-  await ctx.admin.from("studio_assets").update({ caption: description }).eq("id", a.id);
-  return { ok: true, description, short: String(p.short ?? ""), model };
+  const meta = { ...((a.meta ?? {}) as Record<string, unknown>) };
+  let face = false;
+  if (a.kind === "character") {
+    const b = (p.face_box ?? {}) as Record<string, unknown>;
+    const box = { x: num01(b.x), y: num01(b.y), w: num01(b.w), h: num01(b.h) };
+    if ([box.x, box.y, box.w, box.h].every((v) => !Number.isNaN(v)) && box.w > 0.08 && box.h > 0.08) {
+      const crop = await cropFace(ref.bytes, box);
+      if (crop) {
+        const path = `${a.brand_id}/${a.id}/face.png`;
+        const up = await ctx.admin.storage.from("studio").upload(path, crop, { contentType: "image/png", upsert: true });
+        if (!up.error) { meta.face_path = path; meta.face_box = box; face = true; }
+      }
+    }
+    meta.body_marks = String(p.body_marks ?? "").slice(0, 200);
+  }
+  await ctx.admin.from("studio_assets").update({ caption: description, meta }).eq("id", a.id);
+  return { ok: true, description, short: String(p.short ?? ""), face, model };
 }
 
 // ---------- documentos da empresa → campos do treinamento ----------
@@ -694,13 +727,27 @@ async function logoIdeate(ctx: Ctx, body: Record<string, unknown>) {
   for (const i of inputs) { try { imgs.push(imgPart(await download(ctx, i.path))); } catch { /* arquivo sumiu */ } }
   const refine = body.feedback ? { previous: body.previous ?? {}, feedback: String(body.feedback) } : null;
   const sys = logoIdeateSystem({ baseDoc: base?.logo_skill_doc ?? null, brandDoc: brand.is_base ? null : brand.logo_skill_doc, extra: noteOf(s, "logo_rules"), count });
-  const userText = logoIdeateUser({ form, inputs: inputs.map((i) => ({ role: i.role, note: i.note })), refine, count, usedConcepts: Array.isArray(body.used) ? (body.used as unknown[]).map(String).slice(0, 12) : [] });
-  const out = await chat(key, model, sys, imgs.length ? [{ type: "text", text: userText }, ...imgs] : userText, true);
+  const userText = logoIdeateUser({ form, inputs: inputs.map((i) => ({ role: i.role, note: i.note })), refine, count, usedConcepts: Array.isArray(body.used) ? (body.used as unknown[]).map(String).slice(0, 16) : [] });
+  // referências visuais do treino: a IA VÊ logos reais (variadas, sem repetir as usadas há pouco) e escolhe o que emular em cada conceito
+  const { data: pool } = await ctx.admin.from("studio_assets").select("id, favorite, storage_path, thumb_path").in("brand_id", [brand.id, base?.id ?? brand.id]).eq("kind", "logo_ref").limit(300);
+  const { data: recentV } = await ctx.admin.from("logo_versions").select("concept").eq("brand_id", brand.id).order("created_at", { ascending: false }).limit(16);
+  const usedIds = new Set((recentV ?? []).flatMap((v) => ((v.concept as { refs?: { id?: string }[] })?.refs ?? []).map((r) => r.id).filter(Boolean) as string[]));
+  const cands = [...(pool ?? [])].sort((a, b) => (Number(b.favorite) * 4 - (usedIds.has(b.id) ? 8 : 0) + Math.random() * 6) - (Number(a.favorite) * 4 - (usedIds.has(a.id) ? 8 : 0) + Math.random() * 6)).slice(0, 12);
+  const dl = await Promise.all(cands.map(async (a) => { try { return await download(ctx, a.thumb_path ?? a.storage_path); } catch { return null; } }));
+  const candParts: unknown[] = [];
+  cands.forEach((a, i) => { if (dl[i]) candParts.push({ type: "text", text: `REF ${i + 1}` }, imgPart(dl[i]!, "auto")); });
+  const content = [{ type: "text", text: userText + (candParts.length ? `\n\n# REFERÊNCIAS VISUAIS: ${candParts.length / 2} logos REAIS do treino do usuário aparecem a seguir, numeradas (REF 1…). Você está VENDO as imagens: escolha por conceito o que emular em "refs". As imagens anexadas pelo usuário (se houver) vêm antes.` : "") }, ...imgs, ...candParts];
+  const out = await chat(key, model, sys, content, true);
   let parsed: unknown; try { parsed = JSON.parse(out); } catch { throw new Fail("A IA devolveu uma resposta fora do formato. Tente de novo.", 502); }
-  const r = sanitizeConcepts(parsed, count, form);
+  const r = sanitizeConcepts(parsed, count, form, cands.length);
   if (!r.concepts.length) throw new Fail("A IA não devolveu conceitos. Tente de novo com mais detalhes.", 502);
+  const concepts = r.concepts.map((c, i) => {
+    let refs = (c.refs ?? []).map((x) => ({ n: x.n, id: cands[x.n - 1]?.id as string | undefined, take: x.take })).filter((x) => x.id);
+    if (!refs.length) refs = [0, 1, 2].map((k) => cands[(i * 3 + k) % Math.max(1, cands.length)]).filter(Boolean).map((a) => ({ n: 0, id: a.id as string | undefined, take: "acabamento, rigor e equilíbrio" }));
+    return { ...c, refs };
+  });
   await ctx.admin.from("logo_projects").update({ positioning: r.positioning || project.positioning, cliches: r.cliches, status: "generating" }).eq("id", project.id);
-  return { ok: true, model, ...r };
+  return { ok: true, model, positioning: r.positioning, cliches: r.cliches, concepts };
 }
 
 async function logoRollup(ctx: Ctx, projectId: string) {
@@ -737,11 +784,17 @@ async function logoImage(ctx: Ctx, body: Record<string, unknown>) {
     if (model.capabilities?.refs) {
       if (!ver.parent_id) {
         // referências de estilo do treinamento (poucas: cada imagem enviada é cobrada como entrada)
-        const { data: pool } = await ctx.admin.from("studio_assets").select("storage_path, thumb_path, brand_id, favorite, created_at").in("brand_id", [brand.id, base?.id ?? brand.id]).eq("kind", "logo_ref")
-          .order("favorite", { ascending: false }).order("created_at", { ascending: false }).limit(40);
-        const own = (pool ?? []).filter((a) => a.brand_id === brand.id), gen = (pool ?? []).filter((a) => a.brand_id !== brand.id);
-        const styleRefs = [...own.slice(0, 2), ...gen.slice(0, 3)].slice(0, 3);
-        for (const a of styleRefs) { refs.push(await download(ctx, a.thumb_path ?? a.storage_path)); attach.push({ role: "style" }); }
+        const wanted = (((ver.concept ?? {}) as { refs?: { id?: string; take: string }[] }).refs ?? []).filter((r) => r.id);
+        let picks: { storage_path: string; take: string; id: string }[] = [];
+        if (wanted.length) {
+          const { data: got } = await ctx.admin.from("studio_assets").select("id, storage_path").in("id", wanted.map((r) => r.id!));
+          picks = wanted.map((r) => { const a = (got ?? []).find((x) => x.id === r.id); return a ? { id: a.id as string, storage_path: a.storage_path as string, take: r.take } : null; }).filter(Boolean) as typeof picks;
+        }
+        if (!picks.length) {
+          const { data: pool } = await ctx.admin.from("studio_assets").select("id, storage_path, favorite").in("brand_id", [brand.id, base?.id ?? brand.id]).eq("kind", "logo_ref").limit(300);
+          picks = [...(pool ?? [])].sort((a, b) => (Number(b.favorite) * 3 + Math.random() * 6) - (Number(a.favorite) * 3 + Math.random() * 6)).slice(0, 3).map((a) => ({ id: a.id as string, storage_path: a.storage_path as string, take: "acabamento, rigor e equilíbrio" }));
+        }
+        for (const a of picks.slice(0, 3)) { refs.push(await download(ctx, a.storage_path)); attach.push({ role: "style", note: a.take }); }
       }
       const inputs = ((project.inputs ?? []) as { path: string; role: string; note?: string }[]).slice(0, 4);
       for (const i of inputs) { try { refs.push(await download(ctx, i.path)); attach.push({ role: (["competitor", "attempt", "inspiration"].includes(i.role) ? i.role : "inspiration") as LogoAttach["role"], note: i.note }); } catch { /* arquivo sumiu */ } }
@@ -759,7 +812,7 @@ async function logoImage(ctx: Ctx, body: Record<string, unknown>) {
     if (up.error) throw new Fail(`Falha ao salvar a imagem: ${up.error.message}`, 500);
     await ctx.admin.from("logo_versions").update({ status: "done", storage_path: path, width: fin.w ?? null, height: fin.h ?? null, prompt: prompt.slice(0, 12000), usage: raw.usage ?? null, cost_usd: costFromUsage(model.provider, raw.usage) }).eq("id", id);
     await logoRollup(ctx, project.id);
-    return { ok: true, path };
+    return { ok: true, path, attached: attach.map((a) => a.role) };
   } catch (e) {
     await ctx.admin.from("logo_versions").update({ status: "error", error: (e instanceof Error ? e.message : String(e)).slice(0, 600) }).eq("id", id);
     await logoRollup(ctx, ver.project_id);
@@ -880,7 +933,7 @@ async function thumbProjectCtx(ctx: Ctx, projectId: string) {
   return { project, brand: brand!, base };
 }
 
-/** Explicação do vídeo → conceitos de thumbnail */
+/** Explicação do vídeo → conceitos de thumbnail. A IA VÊ thumbnails reais do treino (numeradas) e escolhe quais imitar em cada conceito. */
 async function thumbIdeate(ctx: Ctx, body: Record<string, unknown>) {
   const { key, model } = await textKey(ctx);
   const s = await settings(ctx);
@@ -893,15 +946,38 @@ async function thumbIdeate(ctx: Ctx, body: Record<string, unknown>) {
   for (const i of inputs) { try { imgs.push(imgPart(await download(ctx, i.path))); } catch { /* arquivo sumiu */ } }
   const refine = body.feedback ? { previous: body.previous ?? {}, feedback: String(body.feedback) } : null;
   const sys = thumbIdeateSystem({ baseDoc: base?.thumb_skill_doc ?? null, brandDoc: brand.is_base ? null : brand.thumb_skill_doc, extra: noteOf(s, "thumb_rules"), count, categories: form.categories });
-  const { data: pool } = await ctx.admin.from("studio_assets").select("tags, meta").in("brand_id", [brand.id, base?.id ?? brand.id]).eq("kind", "thumb_ref").not("meta", "is", null).limit(200);
-  const exemplars = exemplarsBlock((pool ?? []).map((a) => ({ obs: a.meta as ThumbObs, tags: ((a.tags ?? []) as string[]).filter((t) => THUMB_CATEGORIES.some((c) => c.id === t)) })), form.categories);
-  const userText = thumbIdeateUser({ form, inputs: inputs.map((i) => ({ role: i.role, note: i.note })), refine, used: Array.isArray(body.used) ? (body.used as unknown[]).map(String).slice(0, 16) : [], exemplars });
-  const out = await chat(key, model, sys, imgs.length ? [{ type: "text", text: userText }, ...imgs] : userText, true);
+  const isCat = (t: string) => THUMB_CATEGORIES.some((c) => c.id === t);
+  const { data: pool } = await ctx.admin.from("studio_assets").select("id, tags, meta, favorite, storage_path, thumb_path").in("brand_id", [brand.id, base?.id ?? brand.id]).eq("kind", "thumb_ref").not("meta", "is", null).limit(500);
+  const items = (pool ?? []).map((a) => ({ id: a.id as string, tags: ((a.tags ?? []) as string[]).filter(isCat), favorite: !!a.favorite, obs: a.meta as ThumbObs, storage_path: a.storage_path as string, thumb_path: a.thumb_path as string | null }));
+  const exemplars = exemplarsBlock(items.map((a) => ({ obs: a.obs, tags: a.tags })), form.categories);
+  // memória: o que as thumbnails recentes da pasta usaram (refs, cores, fontes) para variar
+  const { data: recentV } = await ctx.admin.from("thumb_versions").select("concept").eq("brand_id", brand.id).order("created_at", { ascending: false }).limit(12);
+  const recent = (recentV ?? []).map((v) => v.concept as ThumbConcept);
+  const usedIds = new Set(recent.flatMap((c) => (c.refs ?? []).map((r) => r.id).filter(Boolean) as string[]));
+  const cands = pickRefCandidates(items, form.categories, usedIds, 16);
+  const candParts: unknown[] = [];
+  const downloaded = await Promise.all(cands.map(async (a) => { try { return await download(ctx, a.thumb_path ?? a.storage_path); } catch { return null; } }));
+  cands.forEach((a, i) => {
+    const d = downloaded[i]; if (!d) return;
+    const o = a.obs, l = o.lettering;
+    candParts.push({ type: "text", text: `REF ${i + 1} [${a.tags.join("/")}] ${o.summary} | lettering: ${o.has_text ? `${l.style_id} (${l.font_hint})` : "sem texto"} | paleta: ${o.palette.join(" ")} | esqueleto: ${o.skeleton}` }, imgPart(d, "auto"));
+  });
+  const userText = thumbIdeateUser({ form, inputs: inputs.map((i) => ({ role: i.role, note: i.note })), refine, used: Array.isArray(body.used) ? (body.used as unknown[]).map(String).slice(0, 16) : [], exemplars,
+    recent: recentBlock(recent.map((c) => ({ colors: c.colors, font: c.text?.font_hint, skeleton: c.skeleton, headline: c.text?.headline }))),
+    candidates: `# REFERÊNCIAS VISUAIS: ${candParts.length / 2} thumbnails REAIS do treino do usuário aparecem a seguir, numeradas (REF 1…). Você está VENDO as imagens: use-as para escolher o que emular em cada conceito (campo "refs") e para derivar paleta, luz e letras. As imagens anexas pelo usuário (se houver) vêm antes.` });
+  const content = [{ type: "text", text: userText }, ...imgs, ...candParts];
+  const out = await chat(key, model, sys, content, true);
   let parsed: unknown; try { parsed = JSON.parse(out); } catch { throw new Fail("A IA devolveu uma resposta fora do formato. Tente de novo.", 502); }
-  const r = sanitizeThumbConcepts(parsed, count, form);
+  const r = sanitizeThumbConcepts(parsed, count, form, cands.length);
   if (!r.concepts.length) throw new Fail("A IA não devolveu conceitos. Tente de novo com mais detalhes.", 502);
+  // converte "REF n" em ids reais; sem escolha, usa as 3 primeiras candidatas diferentes entre conceitos
+  const concepts = r.concepts.map((c, i) => {
+    let refs = (c.refs ?? []).map((x) => ({ n: x.n, id: cands[x.n - 1]?.id, take: x.take })).filter((x) => x.id);
+    if (!refs.length) refs = [0, 1, 2].map((k) => cands[(i * 3 + k) % Math.max(1, cands.length)]).filter(Boolean).map((a) => ({ n: 0, id: a.id, take: "craft, framing, lighting and color grading" }));
+    return { ...c, refs };
+  });
   await ctx.admin.from("thumb_projects").update({ analysis: r.analysis || project.analysis, status: "generating" }).eq("id", project.id);
-  return { ok: true, model, ...r };
+  return { ok: true, model, analysis: r.analysis, concepts };
 }
 
 async function thumbRollup(ctx: Ctx, projectId: string) {
@@ -931,20 +1007,34 @@ async function thumbImage(ctx: Ctx, body: Record<string, unknown>) {
     const castIds = form.cast.map((c) => c.id);
     if (castIds.length && !model.capabilities?.refs) throw new Fail(`${model.name} não aceita fotos de referência, necessárias para manter o rosto do personagem. Escolha um modelo OpenAI/Gemini em Modelos e APIs.`);
     if (model.capabilities?.refs) {
-      // pessoas citadas pelo conceito (ou todas, se o conceito não disse): o rosto vem sempre da foto
+      // 1) pessoas: só o ROSTO recortado (identidade). Sem recorte (foto antiga), usa a foto inteira.
       const named = new Set((concept.characters ?? []).map((c) => String(c.who).toLowerCase()));
       const chosen = form.cast.filter((c) => !named.size || named.has(c.label.toLowerCase()) || ![...named].some((n) => form.cast.some((x) => x.label.toLowerCase() === n))).slice(0, 3);
-      const { data: people } = await ctx.admin.from("studio_assets").select("id, label, caption, storage_path").in("id", chosen.map((c) => c.id));
+      const { data: people } = await ctx.admin.from("studio_assets").select("id, label, caption, storage_path, meta").in("id", chosen.map((c) => c.id));
       for (const c of chosen) {
         const a = (people ?? []).find((p) => p.id === c.id); if (!a) continue;
-        refs.push(await download(ctx, a.storage_path)); attach.push({ role: "cast", label: a.label ?? c.label, description: a.caption ?? c.description, castRole: c.role });
+        const facePath = ((a.meta ?? {}) as { face_path?: string }).face_path;
+        refs.push(await download(ctx, facePath ?? a.storage_path));
+        attach.push({ role: "cast", label: a.label ?? c.label, description: facePath ? (a.caption ?? c.description) : undefined, castRole: c.role });
       }
+      // 2) referências visuais de estilo: as que a ideação escolheu (em tamanho cheio), senão uma seleção variada da categoria
       if (!ver.parent_id) {
-        const { data: pool } = await ctx.admin.from("studio_assets").select("storage_path, thumb_path, brand_id, favorite, tags, created_at").in("brand_id", [brand.id, base?.id ?? brand.id]).eq("kind", "thumb_ref")
-          .order("favorite", { ascending: false }).order("created_at", { ascending: false }).limit(200);
-        const tagged = (pool ?? []).filter((a) => ((a.tags ?? []) as string[]).includes(concept.category));
-        const picks = (tagged.length ? tagged : (pool ?? []).filter((a) => a.favorite)).slice(0, 3);
-        for (const a of picks) { refs.push(await download(ctx, a.thumb_path ?? a.storage_path)); attach.push({ role: "style" }); }
+        const wanted = (concept.refs ?? []).filter((r) => r.id);
+        let picks: { id: string; storage_path: string; take: string }[] = [];
+        if (wanted.length) {
+          const { data: got } = await ctx.admin.from("studio_assets").select("id, storage_path").in("id", wanted.map((r) => r.id!));
+          picks = wanted.map((r) => { const a = (got ?? []).find((x) => x.id === r.id); return a ? { id: a.id as string, storage_path: a.storage_path as string, take: r.take } : null; }).filter(Boolean) as typeof picks;
+        }
+        if (!picks.length) {
+          const { data: pool } = await ctx.admin.from("studio_assets").select("id, tags, favorite, meta, storage_path").in("brand_id", [brand.id, base?.id ?? brand.id]).eq("kind", "thumb_ref").limit(500);
+          const items = (pool ?? []).map((a) => ({ id: a.id as string, tags: ((a.tags ?? []) as string[]), favorite: !!a.favorite, obs: a.meta as ThumbObs | null, storage_path: a.storage_path as string }));
+          picks = pickRefCandidates(items, concept.category ? [concept.category] : form.categories, new Set(), 3).map((a) => ({ id: a.id, storage_path: a.storage_path, take: "craft, framing, lighting, color grading and text treatment" }));
+        }
+        for (const pk of picks.slice(0, 3)) { refs.push(await download(ctx, pk.storage_path)); attach.push({ role: "style", note: pk.take }); }
+        if (picks.length && !(concept.refs ?? []).length) await ctx.admin.from("thumb_versions").update({ concept: { ...concept, refs: picks.map((p) => ({ n: 0, id: p.id, take: p.take })) } }).eq("id", id);
+        // 3) amostra de letras na fonte real (gerada no navegador) para o gerador copiar o desenho das letras
+        const spec = String(body.specimen_path ?? "");
+        if (spec && concept.text?.mode === "short") { try { refs.push(await download(ctx, spec)); attach.push({ role: "type" }); } catch { /* sem amostra */ } }
       }
       for (const i of ((project.inputs ?? []) as { path: string; role: string; note?: string }[]).slice(0, 2)) { try { refs.push(await download(ctx, i.path)); attach.push({ role: (["competitor", "inspiration", "own"].includes(i.role) ? i.role : "inspiration") as ThumbAttach["role"] }); } catch { /* arquivo sumiu */ } }
     }
@@ -959,16 +1049,15 @@ async function thumbImage(ctx: Ctx, body: Record<string, unknown>) {
     const path = `${brand.id}/thumbs/${project.id}/${ver.id}.png`;
     const up = await ctx.admin.storage.from("studio").upload(path, fin.bytes, { contentType: "image/png", upsert: true });
     if (up.error) throw new Fail(`Falha ao salvar a imagem: ${up.error.message}`, 500);
-    await ctx.admin.from("thumb_versions").update({ status: "done", storage_path: path, width: fin.w ?? null, height: fin.h ?? null, prompt: prompt.slice(0, 12000), usage: raw.usage ?? null, cost_usd: costFromUsage(model.provider, raw.usage) }).eq("id", id);
+    await ctx.admin.from("thumb_versions").update({ status: "done", storage_path: path, width: fin.w ?? null, height: fin.h ?? null, prompt: prompt.slice(0, 30000), usage: raw.usage ?? null, cost_usd: costFromUsage(model.provider, raw.usage) }).eq("id", id);
     await thumbRollup(ctx, project.id);
-    return { ok: true, path };
+    return { ok: true, path, attached: attach.map((a) => a.role) };
   } catch (e) {
     await ctx.admin.from("thumb_versions").update({ status: "error", error: (e instanceof Error ? e.message : String(e)).slice(0, 600) }).eq("id", id);
     await thumbRollup(ctx, ver.project_id);
     throw e;
   }
 }
-
 
 // ---------- criador de layouts de site (UX/UI) ----------
 /** pega no máximo n itens espalhados de uma lista (mantém o primeiro e o último) */
@@ -990,6 +1079,7 @@ async function layoutObserve(ctx: Ctx, body: Record<string, unknown>) {
   let parsed: unknown; try { parsed = JSON.parse(await chat(key, model, LAYOUT_OBSERVE_SYSTEM, content, true)); } catch { throw new Fail("A IA devolveu uma análise fora do formato. Tente de novo.", 502); }
   const obs = sanitizeSiteObs(parsed);
   if (!obs) throw new Fail("A IA não conseguiu ler este site. Tente de novo.", 502);
+  obs.slice_orders = list.map((a) => a.site_order as number); // índice da leitura → ordem real do recorte (para achar exemplos visuais depois)
   const own = ((site.categories ?? []) as string[]).filter((t) => LAYOUT_CATEGORIES.some((c) => c.id === t));
   await ctx.admin.from("layout_sites").update({ observation: obs, observed_at: new Date().toISOString(), categories: own.length ? own : obs.categories }).eq("id", site.id);
   return { ok: true, observation: obs, categories: own.length ? own : obs.categories, model };
@@ -1112,6 +1202,7 @@ async function layoutImage(ctx: Ctx, body: Record<string, unknown>) {
     }
     const { data: cur } = await ctx.admin.from("layout_sections").select("id, kind, section_key, position, storage_path, status, is_current").eq("project_id", project.id).eq("is_current", true).eq("status", "done").order("position", { ascending: true });
     if (canRef) {
+      if (row.kind === "system" && body.specimen_path) { try { refs.push(await download(ctx, String(body.specimen_path))); attach.push({ role: "type" }); } catch { /* sem amostra */ } }
       if (isSection || row.kind === "mascot") { const sys = (cur ?? []).find((c) => c.kind === "system" && c.storage_path); if (sys) { refs.push(await download(ctx, sys.storage_path!)); attach.push({ role: "system" }); } }
       const concept0 = (row.concept ?? {}) as Record<string, unknown>;
       const mascotName = (plan.design_system.mascot?.name ?? "").toLowerCase();
@@ -1128,13 +1219,25 @@ async function layoutImage(ctx: Ctx, body: Record<string, unknown>) {
           const pick = currentInputs[Math.min(currentInputs.length - 1, Math.floor((idx / tot) * currentInputs.length))];
           try { refs.push(await download(ctx, pick.path)); attach.push({ role: "current", note: `trecho ${idx + 1}/${tot} da rolagem` }); } catch { /* arquivo sumiu */ }
         }
-        if (!hero || row.section_key === "hero") {
+        // recortes REAIS do treino que mostram este mesmo tipo de seção (hero, planos, FAQ…), de sites da categoria; sem mapa de recortes, usa a posição equivalente
+        {
           const catIds = [plan.category, ...form.categories].filter(Boolean);
-          const { data: tr } = await ctx.admin.from("layout_sites").select("id, categories, favorite").in("brand_id", [brand.id, base?.id ?? brand.id]).order("favorite", { ascending: false }).limit(60);
-          const match = (tr ?? []).filter((x) => ((x.categories ?? []) as string[]).some((c) => catIds.includes(c))).slice(0, 2);
-          for (const st of match) {
-            const { data: a } = await ctx.admin.from("studio_assets").select("storage_path, thumb_path").eq("site_id", st.id).eq("kind", "site_ref").order("site_order", { ascending: true }).limit(1);
-            if (a?.[0]) { refs.push(await download(ctx, a[0].thumb_path ?? a[0].storage_path)); attach.push({ role: "style" }); }
+          const { data: tr } = await ctx.admin.from("layout_sites").select("id, categories, favorite, observation").in("brand_id", [brand.id, base?.id ?? brand.id]).not("observation", "is", null).limit(300);
+          const key = String(row.section_key);
+          const scored = (tr ?? []).map((x) => ({ x, score: (((x.categories ?? []) as string[]).some((c) => catIds.includes(c)) ? 10 : 0) + (x.favorite ? 3 : 0) + Math.random() * 5 }));
+          scored.sort((a, b) => b.score - a.score);
+          const take: { site: string; order: number }[] = [];
+          for (const { x } of scored) {
+            const o = x.observation as { slices?: { index: number; sections: string[] }[]; slice_orders?: number[]; sections?: unknown[] };
+            const hit = (o.slices ?? []).find((sl) => sl.sections.includes(key));
+            if (hit && o.slice_orders && o.slice_orders[hit.index] !== undefined) take.push({ site: x.id as string, order: o.slice_orders[hit.index] });
+            if (take.length >= 3) break;
+          }
+          if (!take.length) for (const { x } of scored.slice(0, 2)) { const n = Math.max(1, (((x.observation as { sections?: unknown[] })?.sections ?? []).length) || 6); take.push({ site: x.id as string, order: row.section_key === "hero" ? 0 : Math.max(0, Math.floor(((Number(row.position) % 100) / Math.max(1, n)) * 4)) }); }
+          for (const t of take) {
+            let { data: a } = await ctx.admin.from("studio_assets").select("storage_path").eq("site_id", t.site).eq("kind", "site_ref").eq("site_order", t.order).limit(1);
+            if (!a?.length) ({ data: a } = await ctx.admin.from("studio_assets").select("storage_path").eq("site_id", t.site).eq("kind", "site_ref").order("site_order", { ascending: true }).limit(1));
+            if (a?.[0]) { refs.push(await download(ctx, a[0].storage_path)); attach.push({ role: "style", note: `seção "${row.name}" de um site de referência` }); }
           }
         }
         if (row.section_key === "hero") for (const i of ((project.inputs ?? []) as LayoutInput[]).filter((x) => x.role !== "current").slice(0, 2)) { try { refs.push(await download(ctx, i.path)); attach.push({ role: i.role === "competitor" ? "competitor" : "inspiration" }); } catch { /* arquivo sumiu */ } }
@@ -1158,9 +1261,9 @@ async function layoutImage(ctx: Ctx, body: Record<string, unknown>) {
     const path = `${brand.id}/layouts/${project.id}/${row.id}.png`;
     const up = await ctx.admin.storage.from("studio").upload(path, fin.bytes, { contentType: "image/png", upsert: true });
     if (up.error) throw new Fail(`Falha ao salvar a imagem: ${up.error.message}`, 500);
-    await ctx.admin.from("layout_sections").update({ status: "done", storage_path: path, width: fin.w ?? null, height: fin.h ?? null, prompt: prompt.slice(0, 14000), usage: raw.usage ?? null, cost_usd: costFromUsage(model.provider, raw.usage) }).eq("id", id);
+    await ctx.admin.from("layout_sections").update({ status: "done", storage_path: path, width: fin.w ?? null, height: fin.h ?? null, prompt: prompt.slice(0, 30000), usage: raw.usage ?? null, cost_usd: costFromUsage(model.provider, raw.usage) }).eq("id", id);
     await layoutRollup(ctx, project.id);
-    return { ok: true, path };
+    return { ok: true, path, attached: attach.map((a) => a.role) };
   } catch (e) {
     await ctx.admin.from("layout_sections").update({ status: "error", error: (e instanceof Error ? e.message : String(e)).slice(0, 600) }).eq("id", id);
     await layoutRollup(ctx, row.project_id);

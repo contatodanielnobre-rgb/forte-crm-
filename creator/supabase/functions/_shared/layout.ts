@@ -36,12 +36,13 @@ JSON:
   "mascot": false,
   "hero": { "pattern": "A duas colunas | B centralizado | C tela cheia | D com formulário | other", "headline": "texto exato da manchete", "headline_style": "tamanho, peso, quebras, destaque", "cta": "texto do botão principal", "visual": "o que a imagem/mockup do hero mostra e onde fica", "header": "como é o cabeçalho (logo, links, botão)" },
   "sections": [ { "order": 1, "key": "hero", "label": "nome", "pattern": "composição com posições (ex.: 3 cartões em linha, ícone no topo)", "background": "claro | escuro | cor da marca | imagem", "copy_excerpt": "trecho curto do texto real", "components": ["cartões", "acordeão", "formulário"], "note": "o que esta seção faz bem" } ],
+  "slices": [ { "index": 0, "sections": ["hero", "prova_rapida"] } ],
   "cta_strategy": "como e onde o site pede a ação (quantidade de botões, repetição, urgência)", "social_proof": "que prova social usa e onde",
   "density": "baixa | media | alta", "length": "curta (até 6 seções) | media | longa (12+)",
   "ux_strengths": ["3–5 pontos fortes concretos"], "ux_weaknesses": ["0–4 pontos fracos concretos"],
   "mobile_notes": "o que se percebe de adaptação para celular, se houver", "key_trait": "o que torna este layout memorável e reproduzível como padrão"
 } }
-Não invente o que não vê. Não cite nomes de pessoas reais; descreva-as. Se os recortes forem de várias páginas, descreva a página principal e mencione as outras em "summary".`;
+Em "slices" informe, para CADA recorte (índice 0 a ${n - 1}), quais seções (keys do catálogo) aparecem nele: isso permite achar depois exemplos visuais de cada tipo de seção. Não invente o que não vê. Não cite nomes de pessoas reais; descreva-as. Se os recortes forem de várias páginas, descreva a página principal e mencione as outras em "summary".`;
 }
 
 export interface LayoutSection { order: number; key: string; label: string; pattern: string; background: string; copy_excerpt: string; components: string[]; note: string }
@@ -50,7 +51,7 @@ export interface LayoutObs {
   palette: { hex: string; role: string }[]; typography: { heading: string; heading_weight: string; body: string; scale_note: string }
   grid: string; radius: string; shadows: string; buttons: string; cards: string; icons: string; imagery: string; mascot: boolean
   hero: { pattern: string; headline: string; headline_style: string; cta: string; visual: string; header: string }
-  sections: LayoutSection[]; cta_strategy: string; social_proof: string; density: string; length: string
+  sections: LayoutSection[]; slices?: { index: number; sections: string[] }[]; slice_orders?: number[]; cta_strategy: string; social_proof: string; density: string; length: string
   ux_strengths: string[]; ux_weaknesses: string[]; mobile_notes: string; key_trait: string
 }
 export function sanitizeSiteObs(raw: unknown): LayoutObs | null {
@@ -66,6 +67,7 @@ export function sanitizeSiteObs(raw: unknown): LayoutObs | null {
     grid: clip(r.grid, 260), radius: clip(r.radius, 12).toLowerCase(), shadows: clip(r.shadows, 12).toLowerCase(), buttons: clip(r.buttons, 220), cards: clip(r.cards, 220), icons: clip(r.icons, 40).toLowerCase(), imagery: clip(r.imagery, 260), mascot: !!r.mascot,
     hero: { pattern: clip(h.pattern, 40), headline: clip(h.headline, 140), headline_style: clip(h.headline_style, 200), cta: clip(h.cta, 60), visual: clip(h.visual, 220), header: clip(h.header, 180) },
     sections: (Array.isArray(r.sections) ? r.sections : []).map((s, i): LayoutSection => { const x = rec(s); const k = sectionKey(x.key); return { order: Number(x.order) || i + 1, key: SECTION_KEYS.has(k) ? k : "outra", label: clip(x.label, 60), pattern: clip(x.pattern, 240), background: clip(x.background, 30), copy_excerpt: clip(x.copy_excerpt, 140), components: arr(x.components, 6, 40), note: clip(x.note, 200) }; }).slice(0, 24),
+    slices: (Array.isArray(r.slices) ? r.slices : []).map((x) => { const y = rec(x); return { index: Number(y.index), sections: arr(y.sections, 4, 30).map(sectionKey) }; }).filter((x) => Number.isInteger(x.index) && x.index >= 0).slice(0, 14),
     cta_strategy: clip(r.cta_strategy, 280), social_proof: clip(r.social_proof, 240), density: clip(r.density, 10).toLowerCase(), length: clip(r.length, 40).toLowerCase(),
     ux_strengths: arr(r.ux_strengths, 5, 200), ux_weaknesses: arr(r.ux_weaknesses, 4, 200), mobile_notes: clip(r.mobile_notes, 240), key_trait: clip(r.key_trait, 240),
   };
@@ -336,7 +338,7 @@ export function sanitizeLayoutPlan(raw: unknown, form: LayoutForm): LayoutPlan {
 // =================================================================================================
 // IMAGENS
 // =================================================================================================
-export interface LayoutAttach { role: "system" | "mascot" | "anchor" | "current" | "style" | "competitor" | "inspiration" | "parent"; note?: string | null }
+export interface LayoutAttach { role: "system" | "mascot" | "anchor" | "current" | "style" | "competitor" | "inspiration" | "parent" | "type"; note?: string | null }
 export function layoutAttachmentsBlock(list: LayoutAttach[]): string {
   if (!list.length) return "";
   const lines: string[] = []; let i = 0;
@@ -344,12 +346,13 @@ export function layoutAttachmentsBlock(list: LayoutAttach[]): string {
     const a = list[i], n = i + 1;
     if (a.role === "style") {
       let j = i; while (j + 1 < list.length && list[j + 1].role === "style") j++;
-      lines.push(`- ${j > i ? `Imagens ${n}–${j + 1}` : `Imagem ${n}`} — SITES DE REFERÊNCIA DE ESTILO (de outros projetos): absorva a qualidade de acabamento, a grade, o respiro, a hierarquia e o tratamento de componentes. NUNCA copie textos, marcas, pessoas nem imagens delas.`);
+      lines.push(`- ${j > i ? `Imagens ${n}–${j + 1}` : `Imagem ${n}`} — RECORTES REAIS de sites de referência do treino (${a.note || "a mesma seção"}): copie o NÍVEL de acabamento, a grade, o respiro, a hierarquia e o tratamento dos componentes. NUNCA copie textos, marcas, pessoas nem imagens delas.`);
       i = j + 1; continue;
     }
     if (a.role === "system") lines.push(`- Imagem ${n} — GUIA DE ESTILO aprovado deste projeto: use EXATAMENTE a mesma paleta, tipografia, estilo de botões, cartões, ícones, cantos e sombras.`);
+    else if (a.role === "type") lines.push(`- Imagem ${n} — AMOSTRA TIPOGRÁFICA: os títulos e o texto do site devem usar EXATAMENTE estas famílias de letras (mesmo desenho e peso).`);
     else if (a.role === "mascot") lines.push(`- Imagem ${n} — MASCOTE da marca: quando o mascote aparecer, use ESTE MESMO personagem (forma, cores, rosto, estilo), mudando só pose e expressão.`);
-    else if (a.role === "anchor") lines.push(`- Imagem ${n} — SEÇÃO JÁ APROVADA deste mesmo site (${a.note ?? "hero"}): a nova seção precisa parecer da MESMA página: mesmo cabeçalho/estilo, mesmas cores, fontes, botões, cartões, ícones, cantos e sombras. Não repita a composição dela.`);
+    else if (a.role === "anchor") lines.push(`- Imagem ${n} — SEÇÃO JÁ APROVADA deste mesmo site (${a.note ?? "hero"}): a nova seção precisa parecer da MESMA página: mesmo cabeçalho/estilo, mesmas cores, fontes, botões, cartões, ícones, cantos e sombras. Não repita a composição dela e use fotografias, pessoas e ilustrações DIFERENTES das dela (nunca reaproveite a mesma foto).`);
     else if (a.role === "current") lines.push(`- Imagem ${n} — recorte do SITE ATUAL do cliente (${a.note ?? "seção correspondente"}): fonte do CONTEÚDO REAL (textos, produtos, números). Redesenhe com qualidade muito superior, sem copiar o layout fraco.`);
     else if (a.role === "parent") lines.push(`- Imagem ${n} — a SEÇÃO ATUAL: base do ajuste.`);
     else if (a.role === "competitor") lines.push(`- Imagem ${n} — site de OUTRO negócio: só referência de estrutura; faça DIFERENTE e não copie nada.`);

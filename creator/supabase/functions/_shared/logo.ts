@@ -140,6 +140,7 @@ export function logoIdeateSystem(o: { baseDoc?: string | null; brandDoc?: string
 ${o.baseDoc ? `# TREINAMENTO DE LOGOS DA AGÊNCIA\n${o.baseDoc}\n` : ""}${o.brandDoc ? `# TREINAMENTO DE LOGOS DESTA EMPRESA\n${o.brandDoc}\n` : ""}${o.extra ? `# REGRAS EXTRAS DA AGÊNCIA\n${o.extra}\n` : ""}
 # SUA TAREFA AGORA
 Aplique o processo (seção 1) ao briefing do usuário e entregue ${o.count} CONCEITO(S) de logo, cada um de um território diferente. Para cada conceito escreva a grande ideia, o símbolo (se houver), a tipografia, a composição, as cores e um "image_brief": instruções visuais concretas para o gerador de imagens (formas, proporções, construção, desenho das letras), obedecendo às regras da seção 7 (sem cara de IA) e da seção 11 (entrega em fundo branco, cores chapadas).
+REFERÊNCIAS VISUAIS: você está VENDO logos reais do treino do usuário, numeradas (REF n). Para cada conceito escolha de 1 a 3 REFs e diga em "refs" o que emular de cada uma (nível de acabamento, construção, peso do traço, equilíbrio entre símbolo e nome, espaçamento), variando as escolhas entre os conceitos. NUNCA copie as formas, letras ou símbolos delas: copie o nível e o rigor.
 Responda SOMENTE em JSON válido, em português do Brasil, neste formato:
 {
   "positioning": "1 a 2 frases: posicionamento e personalidade da marca (3 adjetivos concretos + arquétipo)",
@@ -152,6 +153,7 @@ Responda SOMENTE em JSON válido, em português do Brasil, neste formato:
       "layout": "empilhada | horizontal | só nome | emblema | monograma",
       "colors": ["#RRGGBB", "..."],
       "color_logic": "função de cada cor",
+      "refs": [ { "ref": 2, "take": "o que emular desta REF: acabamento | construção do símbolo | peso do traço | equilíbrio símbolo/nome | tipografia | espaçamento" } ],
       "image_brief": "parágrafo com instruções visuais precisas para desenhar esta logo" }
   ]
 }`;
@@ -166,14 +168,15 @@ export function logoIdeateUser(o: IdeateInput): string {
   return lines.join("\n\n");
 }
 
-export interface Concept { name: string; territory: string; big_idea: string; symbol: string; typography: string; layout: string; colors: string[]; color_logic: string; image_brief: string }
-export function sanitizeConcepts(raw: unknown, want: number, form: LogoForm): { positioning: string; cliches: string[]; concepts: Concept[] } {
+export interface Concept { name: string; territory: string; big_idea: string; symbol: string; typography: string; layout: string; colors: string[]; color_logic: string; image_brief: string; refs?: { n: number; id?: string; take: string }[] }
+export function sanitizeConcepts(raw: unknown, want: number, form: LogoForm, maxRef = 0): { positioning: string; cliches: string[]; concepts: Concept[] } {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const list = (Array.isArray(r.concepts) ? r.concepts : []) as Record<string, unknown>[];
   const concepts = list.map((c, i): Concept => ({
     name: clip(c.name, 60) || `Conceito ${i + 1}`, territory: clip(c.territory, 60), big_idea: clip(c.big_idea, 400), symbol: clip(c.symbol, 500),
     typography: clip(c.typography, 400), layout: clip(c.layout, 40), colors: (Array.isArray(c.colors) ? c.colors : []).map(normHex).filter(Boolean).slice(0, 4) as string[],
     color_logic: clip(c.color_logic, 300), image_brief: clip(c.image_brief, 1400),
+    refs: (Array.isArray(c.refs) ? c.refs : []).map((x) => { const y = (x && typeof x === "object" ? x : {}) as Record<string, unknown>; return { n: Number(y.ref ?? y.n) || 0, take: clip(y.take, 160) }; }).filter((x) => x.n > 0 && (maxRef === 0 || x.n <= maxRef)).slice(0, 3),
   })).filter((c) => c.big_idea || c.image_brief).slice(0, want);
   // cores do cliente prevalecem sobre qualquer sugestão da IA
   if (form.colors.length) concepts.forEach((c) => { c.colors = form.colors.slice(0, 4); });
@@ -184,13 +187,13 @@ export interface LogoAttach { role: "style" | "competitor" | "attempt" | "inspir
 export function logoAttachmentsBlock(list: LogoAttach[]): string {
   if (!list.length) return "";
   const t: Record<string, string> = {
-    style: "REFERÊNCIA DE ESTILO/QUALIDADE da agência: absorva o nível de acabamento e o gosto; NÃO copie formas, letras ou símbolos",
+    style: "LOGO REAL DO TREINO da agência: absorva o nível de acabamento, o rigor e o gosto (construção, peso do traço, equilíbrio, espaçamento); NÃO copie formas, letras nem símbolos",
     competitor: "LOGO DE CONCORRENTE: estude e FAÇA DIFERENTE; a nova logo não pode ser confundida com ela",
     attempt: "TENTATIVA ANTERIOR que o cliente não aprovou: resolva o que a incomoda, não apenas varie",
     inspiration: "INSPIRAÇÃO do cliente: aproveite a sensação (ritmo, geometria, contraste), não o desenho",
     parent: "LOGO ATUAL: é a base do ajuste",
   };
-  return `## IMAGENS ANEXAS (nesta ordem)\n${list.map((a, i) => `- Imagem ${i + 1}: ${t[a.role]}${a.note ? ` (nota: ${a.note})` : ""}`).join("\n")}`;
+  return `## IMAGENS ANEXAS (nesta ordem)\n${list.map((a, i) => `- Imagem ${i + 1}: ${t[a.role]}${a.note ? ` (${a.role === "style" ? "emular" : "nota"}: ${a.note})` : ""}`).join("\n")}`;
 }
 
 export const RENDER_RULES = `## REGRAS DE ENTREGA (inegociáveis)

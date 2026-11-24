@@ -7,6 +7,7 @@ import { studioGenerate } from '@/features/studio/data'
 import { makeZip } from '@/features/studio/zip'
 import type { StudioAsset } from '@/features/studio/types'
 import { fileToSlices, type Slice } from './slice'
+import { renderTypePair } from './specimen'
 import type { InputRole, LayoutForm, LayoutInput, LayoutPlan, LayoutProject, LayoutSection, LayoutSectionPlan, LayoutSite, LayoutSiteAnalysis } from './types'
 
 const busy = (s?: string) => s === 'queued' || s === 'running'
@@ -211,8 +212,21 @@ export async function saveProjectForm(project: LayoutProject, form: LayoutForm) 
   must(await supabase.from('layout_projects').update({ form }).eq('id', project.id).select('id'))
 }
 
+/** Amostra das duas fontes do sistema (títulos e texto) na fonte REAL: vai como referência no guia de estilo */
+async function systemSpecimen(project: LayoutProject, row: LayoutSection): Promise<string | undefined> {
+  const t = project.plan?.design_system.typography
+  if (row.kind !== 'system' || !t?.heading) return undefined
+  try {
+    const blob = await renderTypePair(t.heading, t.heading_weight, t.body || t.heading, t.body_weight, project.form.business || 'Título do site')
+    if (!blob) return undefined
+    const path = `${row.brand_id}/layouts/${row.project_id}/spec-${row.id}.png`
+    await uploadWithProgress(path, blob, undefined, BUCKET_STUDIO)
+    return path
+  } catch { return undefined }
+}
+
 async function runRow(project: LayoutProject, row: LayoutSection, qc: QueryClient) {
-  try { await studioGenerate({ action: 'layout_image', section_id: row.id, model_id: project.model_id, quality: project.quality }) }
+  try { await studioGenerate({ action: 'layout_image', section_id: row.id, model_id: project.model_id, quality: project.quality, specimen_path: await systemSpecimen(project, row) }) }
   catch (e) {
     const msg = (e instanceof Error ? e.message : String(e)).slice(0, 500)
     await supabase.from('layout_sections').update({ status: 'error', error: msg }).eq('id', row.id).neq('status', 'done')

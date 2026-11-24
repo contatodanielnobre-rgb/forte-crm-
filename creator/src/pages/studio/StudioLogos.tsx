@@ -14,7 +14,7 @@ export default function StudioLogos() {
   const { data: brands } = useBrands()
   const [brandId, setBrandId] = useState<string | null>(null)
   const stored = (() => { try { return localStorage.getItem(KEY) } catch { return null } })()
-  const brand = brands?.find((b) => b.id === (brandId ?? stored)) ?? brands?.find((b) => !b.is_base) ?? brands?.find((b) => b.is_base) ?? brands?.[0]
+  const brand = brands?.find((b) => b.id === (brandId ?? stored)) ?? brands?.find((b) => b.is_base) ?? brands?.[0]
   const base = brands?.find((b) => b.is_base)
   const [tab, setTab] = useState<'studio' | 'train'>('studio')
   const [chosen, setChosen] = useState(false)

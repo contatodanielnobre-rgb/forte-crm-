@@ -234,6 +234,7 @@ ${typeGuideBlock(o.categories)}
 ${o.baseDoc ? `# TREINAMENTO DA AGÊNCIA (aprendido das thumbnails de referência)\n${o.baseDoc}\n` : ""}${o.brandDoc ? `# TREINAMENTO DESTE CANAL\n${o.brandDoc}\n` : ""}${o.extra ? `# REGRAS EXTRAS DA AGÊNCIA\n${o.extra}\n` : ""}
 # SUA TAREFA AGORA
 Aplique o processo de ideação (seção 10) ao vídeo descrito e entregue ${o.count} CONCEITO(S) de thumbnail, cada um com um ângulo diferente. Decida a categoria (se o usuário não escolheu), o papel de cada personagem (dono do canal × personagem da história × sem pessoa), a expressão, a posição EXATA de cada elemento, o cenário, a paleta, a luz e se leva texto (e qual, com justificativa). Se o usuário forneceu texto exato, use-o; se escolheu "sem texto", não escreva texto. CONTROLES DO USUÁRIO: tudo que aparece em "DIREÇÃO DEFINIDA PELO USUÁRIO", nas pessoas (expressão/olhar/posição definidos) e nas observações é OBRIGATÓRIO e vale em todos os conceitos; interprete-o junto com a categoria, as referências e os exemplos reais (seção 23). O que NÃO foi definido você decide sozinho da melhor forma, sem deixar nada genérico. REGRAS DE NATURALIDADE: (1) cada conceito usa um estilo de lettering DIFERENTE (seção 15) e nunca a fonte itálica extra-pesada genérica; (2) siga os EXEMPLOS REAIS abaixo (lógica, posições e lettering de thumbnails de verdade do usuário) em vez de inventar fórmulas; (3) o image_brief NÃO pode conter nenhum texto além do headline/sub (descreva telas e painéis como formas e gráficos, sem palavras ou números extras); (4) objetos com lógica física e escala real; (5) luz com fonte plausível, pele e cenário fotográficos; (6) nada de neon espalhado nem cartões de interface flutuando. Use somente as pessoas com foto disponível, citando o nome exato.
+REGRAS DE PERSONAGEM, ASSUNTO, CORES E REFERÊNCIAS (novas, inegociáveis): (a) a foto de uma pessoa serve SÓ para o ROSTO (identidade): NUNCA herde dela a pose, os braços cruzados, a camiseta, o relógio, a tatuagem nem o fundo; (b) cada conceito define enquadramento, ângulo da cabeça, expressão e FIGURINO coerente com o tema e a época (capacete e farda para guerra, terno de época para política, jaleco para ciência, camisa social para negócios, casual só se o tema for cotidiano), e esses quatro itens são DIFERENTES entre os conceitos; (c) o ASSUNTO do vídeo precisa aparecer em grande: se fala de uma pessoa, objeto ou lugar histórico, ele é um elemento dominante (em "subjects"), como retrato restaurado e colorizado, pintura, estátua, mapa; se o vídeo cita pessoas históricas PELO NOME (presidentes, reis, líderes), pelo menos metade dos conceitos mostra o retrato restaurado e colorizado dessas pessoas, grande, ao lado ou atrás do apresentador (como nas thumbnails de história do usuário), e os demais podem usar objetos, mapas e cenas; (d) CORES: derive a paleta do assunto específico e das referências que você escolheu (preencha "palette_from"); NÃO use vermelho e branco por padrão em tema histórico, nem repita a família de cor dominante das thumbnails recentes listadas; cada conceito tem uma paleta própria; (e) REFERÊNCIAS: você está VENDO thumbnails reais numeradas (REF n). Para cada conceito escolha de 1 a 3 REFs e diga em "refs" o que emular de cada uma (letras, composição, luz, paleta, fundo, enquadramento do rosto…), variando as escolhas entre os conceitos e preferindo as do mesmo tipo de assunto.
 Responda SOMENTE em JSON válido, em português do Brasil:
 {
   "analysis": "2–3 frases: promessa/conflito central do vídeo, emoção dominante, categoria escolhida e por quê",
@@ -243,7 +244,10 @@ Responda SOMENTE em JSON válido, em português do Brasil:
     "category": "id da categoria dominante",
     "hook": "por que esta imagem faz clicar (curiosidade/emoção) em 1–2 frases",
     "composition": "quem fica onde (esquerda/centro/direita), tamanho relativo, diagonais e espaço negativo",
-    "characters": [ { "who": "nome exato de uma pessoa disponível | 'personagem genérico' | 'sem pessoa'", "placement": "posição e tamanho", "expression": "emoção exata", "gaze": "para onde olha", "pose": "pose e mãos", "outfit": "roupa, se relevante" } ],
+    "characters": [ { "who": "nome exato de uma pessoa disponível | 'personagem genérico' | 'sem pessoa'", "placement": "posição e tamanho", "framing": "close do rosto | busto (peito para cima) | meio corpo", "angle": "frente | 3/4 para a esquerda | 3/4 para a direita | levemente de baixo | perfil 3/4", "expression": "emoção exata", "gaze": "para onde olha", "pose": "pose e mãos (NUNCA a pose da foto)", "outfit": "FIGURINO coerente com o tema e a época do vídeo (obrigatório; nunca a roupa da foto)" } ],
+    "subjects": [ { "who": "pessoa/objeto/lugar central do ASSUNTO do vídeo (ex.: Dom Pedro II, um tanque, o mapa de Cuba)", "how": "como aparece: retrato restaurado e colorizado grande à esquerda, pintura a óleo, estátua, mapa antigo…" } ],
+    "palette_from": "de onde vem a paleta: assunto + REF n escolhidas (explique em 1 frase)",
+    "refs": [ { "ref": 3, "take": "o que emular desta REF: letras | composição | luz | paleta | fundo | enquadramento do rosto | texto atrás do sujeito" } ],
     "scene": "fundo/cenário e luz",
     "elements": ["objetos e efeitos importantes e onde ficam"],
     "colors": ["#RRGGBB", "..."],
@@ -269,11 +273,13 @@ export function exemplarsBlock(list: { obs: ThumbObs; tags: string[] }[], catego
   return `# EXEMPLOS REAIS (thumbnails que o usuário fez/estuda; imite a LÓGICA, as posições e a variedade de lettering, nunca o conteúdo)\n${picks.map(line).join("\n")}`;
 }
 
-export function thumbIdeateUser(o: { form: ThumbForm; inputs: { role: string; note?: string | null }[]; refine?: { previous: unknown; feedback: string } | null; used?: string[]; exemplars?: string }): string {
+export function thumbIdeateUser(o: { form: ThumbForm; inputs: { role: string; note?: string | null }[]; refine?: { previous: unknown; feedback: string } | null; used?: string[]; exemplars?: string; recent?: string; candidates?: string }): string {
   const t: Record<string, string> = { competitor: "Thumbnail de OUTRO canal (referência de estrutura; faça diferente)", inspiration: "Inspiração (absorva a sensação/composição, não o conteúdo)", own: "Uma thumbnail anterior do usuário (melhore)" };
   const parts = [`# VÍDEO\n${formBlock(o.form)}\n\n# O QUE O VÍDEO VAI FALAR (explicação do usuário)\n${o.form.brief || "(não explicou)"}`];
   if (o.inputs.length) parts.push(`# IMAGENS ANEXAS PELO USUÁRIO\n${o.inputs.map((i, n) => `${n + 1}. ${t[i.role] ?? i.role}${i.note ? ` — nota: ${i.note}` : ""}`).join("\n")}`);
   if (o.exemplars) parts.push(o.exemplars);
+  if (o.candidates) parts.push(o.candidates);
+  if (o.recent) parts.push(o.recent);
   if (o.used?.length) parts.push(`# JÁ EXISTEM ESTES CONCEITOS (não repita)\n${o.used.map((c) => `- ${c}`).join("\n")}`);
   if (o.refine) parts.push(`# AJUSTE PEDIDO\nConceito anterior: ${JSON.stringify(o.refine.previous).slice(0, 2000)}\nO usuário pediu: ${o.refine.feedback}`);
   return parts.join("\n\n");
@@ -281,10 +287,11 @@ export function thumbIdeateUser(o: { form: ThumbForm; inputs: { role: string; no
 
 export interface ThumbConcept {
   index?: number; name: string; angle: string; category: string; hook: string; composition: string; objects?: string; skeleton?: string
-  characters: { who: string; placement: string; expression: string; pose: string; outfit: string; gaze?: string }[]
+  characters: { who: string; placement: string; expression: string; pose: string; outfit: string; gaze?: string; framing?: string; angle?: string }[]
+  subjects?: { who: string; how: string }[]; palette_from?: string; refs?: { n: number; id?: string; take: string }[]
   scene: string; elements: string[]; colors: string[]; text: { mode: string; headline: string; sub: string; placement: string; style: string; style_id?: string; font_hint?: string; look?: string; container?: string; integration?: string }; text_reason: string; image_brief: string
 }
-export function sanitizeThumbConcepts(raw: unknown, want: number, form: ThumbForm): { analysis: string; concepts: ThumbConcept[] } {
+export function sanitizeThumbConcepts(raw: unknown, want: number, form: ThumbForm, maxRef = 0): { analysis: string; concepts: ThumbConcept[] } {
   const r = rec(raw);
   const list = (Array.isArray(r.concepts) ? r.concepts : []) as Record<string, unknown>[];
   const concepts = list.map((c, i): ThumbConcept => {
@@ -295,13 +302,15 @@ export function sanitizeThumbConcepts(raw: unknown, want: number, form: ThumbFor
     if (mode === "none") headline = "";
     return {
       name: clip(c.name, 60) || `Ideia ${i + 1}`, angle: clip(c.angle, 40), category: cats([c.category], 1)[0] ?? form.categories[0] ?? "", hook: clip(c.hook, 300), composition: clip(c.composition, 500),
-      characters: (Array.isArray(c.characters) ? c.characters : []).map((x) => { const y = rec(x); return { who: clip(y.who, 60), placement: clip(y.placement, 160), expression: clip(y.expression, 120), gaze: clip(y.gaze, 100), pose: clip(y.pose, 160), outfit: clip(y.outfit, 120) }; }).slice(0, 5),
+      characters: (Array.isArray(c.characters) ? c.characters : []).map((x) => { const y = rec(x); return { who: clip(y.who, 60), placement: clip(y.placement, 160), expression: clip(y.expression, 120), gaze: clip(y.gaze, 100), pose: clip(y.pose, 200), outfit: clip(y.outfit, 200), framing: clip(y.framing, 60), angle: clip(y.angle, 60) }; }).slice(0, 5),
+      subjects: (Array.isArray(c.subjects) ? c.subjects : []).map((x) => { const y = rec(x); return { who: clip(y.who, 80), how: clip(y.how, 200) }; }).filter((x) => x.who).slice(0, 4), palette_from: clip(c.palette_from, 200),
+      refs: (Array.isArray(c.refs) ? c.refs : []).map((x) => { const y = rec(x); return { n: Number(y.ref ?? y.n) || 0, take: clip(y.take, 160) }; }).filter((x) => x.n > 0).slice(0, 3),
       scene: clip(c.scene, 400), elements: arr(c.elements, 8, 140), colors: (Array.isArray(c.colors) ? c.colors : []).map(hex).filter(Boolean).slice(0, 4) as string[],
       objects: clip(c.objects, 400), skeleton: clip(c.skeleton, 140),
-      text: { mode, headline, sub: mode === "none" ? "" : clip(t.sub, 80), placement: clip(t.placement, 160), style: clip(t.style, 200), style_id: LET_IDS.includes(clip(t.style_id, 30)) ? clip(t.style_id, 30) : "", font_hint: clip(t.font_hint, 60), look: clip(t.look, 220), container: clip(t.container, 40), integration: clip(t.integration, 50) }, text_reason: clip(c.text_reason, 240), image_brief: clip(c.image_brief, 1800),
+      text: { mode, headline, sub: mode === "none" ? "" : clip(t.sub, 80), placement: clip(t.placement, 160), style: clip(t.style, 200), style_id: LET_IDS.includes(clip(t.style_id, 30)) ? clip(t.style_id, 30) : "", font_hint: clip(String(t.font_hint ?? '').split(/[,;(—–]/)[0], 40), look: clip(t.look, 220), container: clip(t.container, 40), integration: clip(t.integration, 50) }, text_reason: clip(c.text_reason, 240), image_brief: clip(c.image_brief, 1800),
     };
-  }).filter((c) => c.image_brief || c.composition).slice(0, want).map((c, i) => applyDirection(c, form, i));
-  return { analysis: clip(r.analysis, 500), concepts };
+  }).filter((c) => c.image_brief || c.composition).slice(0, want).map((c, i) => applyDirection(c, form, i)).map((c) => ({ ...c, refs: (c.refs ?? []).filter((x) => maxRef === 0 || x.n <= maxRef) }));
+  return { analysis: clip(r.analysis, 500), concepts: diversify(concepts, form) };
 }
 
 /** Garante que o que o usuário definiu vale em TODAS as ideias, mesmo que a IA tenha esquecido (o resto continua sendo decisão dela) */
@@ -337,72 +346,132 @@ export function applyDirection(c: ThumbConcept, form: ThumbForm, i = 0): ThumbCo
 // =================================================================================================
 // IMAGEM
 // =================================================================================================
-export interface ThumbAttach { role: "cast" | "style" | "inspiration" | "competitor" | "own" | "parent"; label?: string | null; description?: string | null; castRole?: string }
+export interface ThumbAttach { role: "cast" | "style" | "inspiration" | "competitor" | "own" | "parent" | "type"; label?: string | null; description?: string | null; castRole?: string; note?: string | null }
 export function thumbAttachmentsBlock(list: ThumbAttach[]): string {
   if (!list.length) return "";
-  const lines: string[] = [];
-  let i = 0;
-  while (i < list.length) {
-    const a = list[i], n = i + 1;
-    if (a.role === "style") {
-      let j = i; while (j + 1 < list.length && list[j + 1].role === "style") j++;
-      lines.push(`- ${j > i ? `Imagens ${n}–${j + 1}` : `Imagem ${n}`} — THUMBNAILS DE REFERÊNCIA DE ESTILO (de outros vídeos): absorva composição, saturação, tratamento de luz, enquadramento do rosto, tipo de fundo, efeitos e uso de texto. NUNCA copie as pessoas, os rostos, os textos, as marcas nem os cenários delas.`);
-      i = j + 1; continue;
-    }
-    if (a.role === "cast") lines.push(`- Imagem ${n} — PESSOA "${a.label || "pessoa"}" (${a.castRole === "story" ? "personagem da história" : a.castRole === "support" ? "coadjuvante" : "dono do canal"}): é a referência EXATA do rosto. Sempre que ela aparecer, use ESTA MESMA pessoa (rosto, formato do crânio, cabelo, tom de pele, idade, barba, traços marcantes). Pode mudar expressão, pose, ângulo, luz e roupa, mas NUNCA o rosto.${a.description ? ` Descrição: ${a.description}` : ""}`);
-    else if (a.role === "parent") lines.push(`- Imagem ${n} — a THUMBNAIL ATUAL: base do ajuste.`);
-    else if (a.role === "competitor") lines.push(`- Imagem ${n} — thumbnail de OUTRO canal: só referência de estrutura; faça DIFERENTE e não copie nada dela.`);
-    else if (a.role === "own") lines.push(`- Imagem ${n} — thumbnail anterior do usuário que não ficou como ele queria: resolva o que a enfraquece.`);
-    else lines.push(`- Imagem ${n} — INSPIRAÇÃO: pegue a sensação e a energia, não o conteúdo.`);
-    i++;
-  }
-  return `## IMAGENS ANEXAS (nesta ordem)\n${lines.join("\n")}`;
+  const lines = list.map((a, i) => {
+    const n = i + 1;
+    if (a.role === "cast") return `- Image ${n} — FACE ID of "${a.label || "person"}" (${a.castRole === "story" ? "story character" : a.castRole === "support" ? "supporting person" : "channel host"}): reproduce EXACTLY this face (features, skull shape, hair, beard, skin tone, age). Use ONLY the face. IGNORE the pose, arms, clothing, accessories, watch, tattoos and background of this image: they are NOT part of the scene and must NOT be copied. Dress, pose and frame the person as specified in the scene.${a.description ? ` Face details: ${a.description}` : ""}`;
+    if (a.role === "style") return `- Image ${n} — REAL REFERENCE THUMBNAIL from a top channel. Take from it: ${a.note || "craft, framing, lighting, color grading, depth and text treatment"}. Match its level of finish and professionalism (cutout light, glow, retouched portraits, dimensional background, headline scale). NEVER copy its people, words, logos or exact scene.`;
+    if (a.role === "type") return `- Image ${n} — TYPE SPECIMEN: the headline must be written with EXACTLY these letterforms (same font family, weight, width and proportions). Only the color, texture and finish may follow the style described in the scene.`;
+    if (a.role === "parent") return `- Image ${n} — the CURRENT THUMBNAIL: base of the adjustment.`;
+    if (a.role === "competitor") return `- Image ${n} — thumbnail from ANOTHER channel: structure reference only; do something DIFFERENT and copy nothing.`;
+    if (a.role === "own") return `- Image ${n} — an earlier thumbnail by the user that did not work: fix what weakens it.`;
+    return `- Image ${n} — INSPIRATION: take the feeling and energy, not the content.`;
+  });
+  return `## ATTACHED IMAGES (in this order)\n${lines.join("\n")}`;
 }
 
-export const THUMB_RULES = `## REGRAS DA THUMBNAIL (inegociáveis)
-- Formato 16:9 horizontal (1280×720). Assunto principal fora do canto inferior direito e com ~3% de margem das bordas. Deve ser entendida a 168 px de largura: um foco dominante (o rosto com 35–60% da altura), o resto menor, mais escuro ou mais desfocado e posicionado para apontar para ele.
-- FOTOGRAFIA REAL, não render: câmera 50–85 mm, nitidez nos olhos, grão sutil, pele com poros e assimetrias naturais (nada de pele de plástico/porcelana, olhos sem reflexo ou dentes perfeitos demais), roupas com dobras, cenário com profundidade e pequenas imperfeições. Grading de cinema com UMA cor dominante controlada; sem neon espalhado e sem glow sem fonte de luz.
-- LUZ COM LÓGICA: uma fonte principal plausível (softbox lateral, janela, luz do cenário, brilho de tela) e contraluz leve; sombras coerentes entre pessoa e objetos.
-- OBJETOS COM LÓGICA: cada objeto tem motivo ligado ao vídeo e interage fisicamente (mão que segura com os dedos contornando, objeto apoiado com sombra de contato, algo que entra pelo quadro). Escala e perspectiva reais; no máximo 1 objeto-herói + 1 de apoio. Mãos com 5 dedos, em escala natural; gesto de apontar relaxado, nunca um dedo gigante. Nada de cartões de interface flutuando no ar nem setas néon enormes.
-- TEXTO: SOMENTE o indicado, UMA vez, com ortografia EXATA. Nenhuma palavra, número ou rótulo a mais (telas, painéis e objetos mostram formas e gráficos plausíveis sem palavras legíveis). O lettering segue o estilo pedido, com personalidade, textura e integração à cena, e é ancorado ao rosto (alinhado aos olhos, ao queixo ou à borda da cabeça). Se não houver texto indicado, não escreva nada. Nenhuma marca, logo ou placa com palavras inventadas.
-- Cores limpas, uma dominante + um acento, sem cinza lavado nem saturação digital uniforme. Corte elementos pelas bordas como numa foto real; evite tudo centralizado e inteiro.`;
+export const THUMB_RULES = `## CRAFT RULES (non-negotiable)
+- 16:9 YouTube thumbnail. One dominant focus (the face 35–60% of the height when a person is shown), everything else smaller and supporting; keep the main subject out of the bottom-right corner and ~3% from the edges. Must read at 168 px wide.
+- Look like a professional Photoshop composite: layered depth (subject cut out with rim light, background with atmosphere), retouched but natural skin with pores, cinematic lighting with a plausible source plus glow/vignette, historical portraits restored and colorized with believable texture, objects with real scale and contact shadows.
+- Color: follow the concept palette and the attached references. Do NOT default to red + white; one dominant hue family, one accent, controlled grading.
+- Text: ONLY the text specified, written ONCE with exact spelling, in the lettering described (or the TYPE SPECIMEN). No extra words, numbers, logos or fake brands anywhere (screens, signs, papers show shapes, not readable text).
+- Never copy people, words or scenes from the reference thumbnails: copy only their craft.
+- People: natural anatomy, 5 fingers, no plastic skin, no identical stock pose.`;
 
 export function buildThumbPrompt(o: { form: ThumbForm; concept: ThumbConcept; index: number; total: number; attach: ThumbAttach[]; learned?: string }): string {
   const c = o.concept;
   const lt = c.text.style_id ? lettering(c.text.style_id) : null;
+  const hasSpec = o.attach.some((a) => a.role === "type");
+  const font = o.form.dir?.text_font || c.text.font_hint || lt?.fonts[0] || "";
   const text = c.text.mode === "short" && c.text.headline
-    ? `TEXTO EXATO (o ÚNICO texto da imagem): "${c.text.headline}"${c.text.sub ? ` e, bem menor, "${c.text.sub}"` : ""}. Ortografia idêntica, em ${o.form.lang || "português do Brasil"}. Posição: ${c.text.placement || "ancorado ao rosto"}.
-  LETTERING (personalidade própria, NÃO a fonte padrão itálica extra-pesada de IA): ${[lt ? `estilo "${lt.label}" — ${lt.look}` : "", c.text.look && `aparência: ${c.text.look}`, (c.text.font_hint || lt?.fonts[0]) && (o.form.dir?.text_font ? `use EXATAMENTE a tipografia "${o.form.dir.text_font}" (letras com a anatomia real dessa fonte)` : `fonte parecida com ${c.text.font_hint || lt?.fonts[0]}`), c.text.container && c.text.container !== "none" && `contêiner: ${c.text.container}`, c.text.integration && `integração: ${c.text.integration}`, c.text.style].filter(Boolean).join("; ")}. Letras sem brilho plástico: se houver contorno ou sombra, são discretos e coerentes com a luz da cena.`
-    : "SEM TEXTO: não escreva nenhuma palavra, letra ou número na imagem.";
-  const chars = c.characters.filter((x) => x.who && !/sem pessoa/i.test(x.who)).map((x) => `- ${x.who}: ${[x.placement, x.expression && `expressão: ${x.expression}`, x.gaze && `olhar: ${x.gaze}`, x.pose && `pose: ${x.pose}`, x.outfit && `roupa: ${x.outfit}`].filter(Boolean).join("; ")}`).join("\n");
-  return `# TAREFA
-Você é um diretor de arte de thumbnails virais do YouTube. Crie UMA thumbnail 16:9 (conceito ${o.index} de ${o.total}) para o vídeo abaixo.
+    ? `TEXT (the ONLY text in the image, spelled exactly, in ${o.form.lang || "Brazilian Portuguese"}): "${c.text.headline}"${c.text.sub ? ` and, much smaller, "${c.text.sub}"` : ""}. Placement: ${c.text.placement || "anchored to the face"}. ${hasSpec ? "Lettering: use EXACTLY the letterforms of the TYPE SPECIMEN image" : `Lettering: ${font ? `font like ${font} (real letter anatomy)` : "a distinctive display face, not the generic italic extra-bold AI font"}`}${c.text.look ? `; look: ${c.text.look}` : ""}${c.text.container && c.text.container !== "none" ? `; container: ${c.text.container}` : ""}${c.text.integration ? `; integration: ${c.text.integration}` : ""}. No plastic gloss; any outline or shadow is subtle and consistent with the scene light.`
+    : "NO TEXT: do not write any word, letter or number in the image.";
+  const chars = c.characters.filter((x) => x.who && !/sem pessoa/i.test(x.who)).map((x) => `- ${x.who}: ${[x.placement && `placement: ${x.placement}`, x.framing && `framing: ${x.framing}`, x.angle && `head angle: ${x.angle}`, x.expression && `expression: ${x.expression}`, x.gaze && `gaze: ${x.gaze}`, x.pose && `pose: ${x.pose}`, x.outfit && `WARDROBE (new, not from the photo): ${x.outfit}`].filter(Boolean).join("; ")}`).join("\n");
+  const subj = (c.subjects ?? []).map((x) => `- ${x.who}: ${x.how}`).join("\n");
+  const user = directionBlock(o.form).startsWith("- DIREÇÃO DEFINIDA") ? `\n## USER CHOICES (override anything else)\n${directionBlock(o.form).split("\n").slice(1).join("\n")}\n` : "";
+  return `# TASK
+Create ONE YouTube thumbnail (16:9, concept ${o.index} of ${o.total}) at the quality of a top channel's Photoshop work${o.form.channel ? ` (channel: ${o.form.channel})` : ""}.
 
-## O VÍDEO
-${o.form.title ? `Título: "${o.form.title}"\n` : ""}${o.form.brief ? `Resumo: ${o.form.brief.slice(0, 900)}` : ""}
+${thumbAttachmentsBlock(o.attach)}
 
-## CONCEITO: "${c.name}"${c.category ? ` · categoria ${categoryById(c.category)?.label ?? c.category}` : ""}
-- Por que clica: ${c.hook}
-- Composição: ${c.composition}
-${chars ? `- Pessoas:\n${chars}\n` : "- Pessoas: nenhuma (conceito sem rosto)\n"}- Cenário e luz: ${c.scene}
-${c.elements.length ? `- Elementos: ${c.elements.join("; ")}\n` : ""}- Cores: ${c.colors.join(", ") || "saturadas, uma dominante e um acento"}
+## THE VIDEO
+${o.form.title ? `Title: "${o.form.title}"\n` : ""}${o.form.brief ? `Summary: ${o.form.brief.slice(0, 700)}` : ""}
+
+## SCENE — concept "${c.name}"${c.category ? ` (${categoryById(c.category)?.label ?? c.category})` : ""}
+- Why it clicks: ${c.hook}
+- Composition: ${c.composition}
+${chars ? `- People (identity comes ONLY from the face image; everything below is NEW):\n${chars}\n` : "- People: none in this concept\n"}${subj ? `- Story subjects that must be clearly visible and large:\n${subj}\n` : ""}- Setting and light: ${c.scene}
+${c.elements.length ? `- Elements: ${c.elements.join("; ")}\n` : ""}- Palette: ${c.colors.join(", ") || "derive from the subject and the references"}${c.palette_from ? ` (${c.palette_from})` : ""}
 - ${text}
-${c.objects ? `- Lógica dos objetos: ${c.objects}\n` : ""}${c.skeleton ? `- Esqueleto de composição: ${c.skeleton}\n` : ""}- Direção detalhada: ${c.image_brief}
-${directionBlock(o.form).startsWith("- DIREÇÃO DEFINIDA") ? `\n## ESCOLHAS DO USUÁRIO (prevalecem sobre qualquer outra instrução)\n${directionBlock(o.form).split("\n").slice(1).join("\n")}\n` : ""}
-
+${c.objects ? `- Object logic: ${c.objects}\n` : ""}${c.skeleton ? `- Layout skeleton: ${c.skeleton}\n` : ""}- Art direction: ${c.image_brief}
+${user}
 ${THUMB_RULES}
-${o.learned ? `\n## ESTILO APRENDIDO NO TREINAMENTO (siga)\n${o.learned}\n` : ""}${thumbAttachmentsBlock(o.attach) ? `\n${thumbAttachmentsBlock(o.attach)}\n` : ""}`.trim();
+${o.learned ? `\n## LEARNED FROM THE USER'S TRAINING (follow)\n${o.learned}\n` : ""}`.trim();
 }
 
 export function buildThumbRefinePrompt(o: { form: ThumbForm; feedback: string; attach: ThumbAttach[] }): string {
-  return `# TAREFA: AJUSTAR UMA THUMBNAIL EXISTENTE
-A imagem 1 é a thumbnail atual. Aplique SOMENTE a alteração pedida e mantenha TODO o resto igual: composição, rosto das pessoas (mesma pessoa, mesmos traços), cenário, cores e texto (exceto se a alteração fala deles).
+  return `# TASK: ADJUST AN EXISTING THUMBNAIL
+Image 1 is the current thumbnail. Apply ONLY the requested change and keep EVERYTHING else identical: composition, the people (same person, same features), setting, colors and text (unless the change is about them).
 
-## ALTERAÇÃO PEDIDA
+## REQUESTED CHANGE
 ${o.feedback}
 
 ${THUMB_RULES}
 ${thumbAttachmentsBlock(o.attach) ? `\n${thumbAttachmentsBlock(o.attach)}` : ""}`.trim();
+}
+
+// =================================================================================================
+// DIVERSIDADE: pose, enquadramento, expressão e fonte nunca se repetem entre os conceitos
+// =================================================================================================
+const FRAMINGS = ["busto (peito para cima), cabeça grande", "close do rosto (rosto e ombros)", "meio corpo (da cintura para cima)"];
+const ANGLES = ["3/4 voltado para a esquerda", "3/4 voltado para a direita", "de frente, câmera levemente abaixo do queixo", "perfil 3/4 com olhar por cima do ombro"];
+const EXPRS = ["shock", "serious", "open_mouth", "smirk", "doubt", "think", "fear"];
+const POSES = ["ombros firmes, mãos fora de quadro", "uma mão segurando o próprio queixo", "apontando para o elemento principal", "inclinado para a frente, encarando", "mão aberta mostrando o objeto-chave"];
+const BANNED = /(bra[cç]os? cruzados?|crossed arms|camiseta|t-?shirt|rel[oó]gio|watch|tatuagem|tattoo)/i;
+const DISPLAY_FONTS = ["Anton", "Bebas Neue", "Oswald", "Montserrat ExtraBold", "Archivo Black", "Poppins Bold", "Playfair Display Black", "Cinzel Bold", "Inter ExtraBold", "Open Sans ExtraBold", "Bangers", "Alfa Slab One", "Barlow Condensed Bold", "League Gothic"];
+export function diversify(list: ThumbConcept[], form: ThumbForm): ThumbConcept[] {
+  const userTxt = `${form.notes ?? ""} ${form.brief} ${form.avoid ?? ""}`;
+  const allowBanned = BANNED.test(userTxt);
+  const usedFont = new Set<string>(), usedExpr = new Map<string, number>(), usedFrame = new Map<string, number>();
+  return list.map((c, i) => {
+    const out: ThumbConcept = { ...c, characters: c.characters.map((x) => ({ ...x })), text: { ...c.text } };
+    out.characters = out.characters.map((x, k) => {
+      if (!x.who || /sem pessoa/i.test(x.who)) return x;
+      const cfg = form.cast.find((q) => q.label.toLowerCase() === x.who.toLowerCase());
+      const y = { ...x };
+      if (!allowBanned && BANNED.test(`${y.pose} ${y.outfit} ${y.placement}`)) { y.pose = POSES[(i + k) % POSES.length]; if (BANNED.test(y.outfit)) y.outfit = "figurino coerente com o tema e a época do vídeo (NÃO camiseta preta, NÃO relógio, NÃO tatuagem à mostra)"; }
+      if (!y.framing || (usedFrame.get(y.framing) ?? 0) >= 2) y.framing = FRAMINGS[(i + k) % FRAMINGS.length];
+      usedFrame.set(y.framing, (usedFrame.get(y.framing) ?? 0) + 1);
+      if (!y.angle) y.angle = ANGLES[(i + k) % ANGLES.length];
+      if (!cfg || !cfg.expression || cfg.expression === "auto") {
+        const key = y.expression.toLowerCase().slice(0, 14);
+        if (!y.expression || (usedExpr.get(key) ?? 0) >= 1) y.expression = EXPRESSION_LABEL[EXPRS[(i + k) % EXPRS.length]];
+        usedExpr.set(y.expression.toLowerCase().slice(0, 14), (usedExpr.get(y.expression.toLowerCase().slice(0, 14)) ?? 0) + 1);
+      }
+      return y;
+    });
+    if (out.text.mode === "short" && !form.dir?.text_font) {
+      const fam = (out.text.font_hint || "").split(/ (Thin|Light|Regular|Medium|SemiBold|Bold|ExtraBold|Black)/)[0].toLowerCase();
+      if (!fam || usedFont.has(fam)) { const g = THUMB_TYPE_GUIDE[out.category]?.fonts.map((f) => f.name) ?? []; const pool = [...g, ...DISPLAY_FONTS].filter((f) => !usedFont.has(f.split(" ")[0].toLowerCase())); out.text.font_hint = pool[i % Math.max(1, pool.length)] ?? DISPLAY_FONTS[i % DISPLAY_FONTS.length]; }
+      usedFont.add((out.text.font_hint || "").split(" ")[0].toLowerCase());
+    }
+    return out;
+  });
+}
+
+/** Resumo do que as thumbnails RECENTES da pasta usaram (cores, esqueleto, fonte): serve para a IA não repetir */
+export function recentBlock(list: { colors?: string[]; font?: string; skeleton?: string; headline?: string }[]): string {
+  if (!list.length) return "";
+  const fam = (h: string) => { const r = parseInt(h.slice(1, 3), 16), g = parseInt(h.slice(3, 5), 16), b = parseInt(h.slice(5, 7), 16); const mx = Math.max(r, g, b), mn = Math.min(r, g, b); if (mx - mn < 30) return mx < 90 ? "preto/grafite" : "cinza/branco"; if (r >= g && r >= b) return g > b ? (g > r * 0.6 ? "amarelo/âmbar" : "laranja/marrom") : "vermelho"; if (g >= r && g >= b) return "verde"; return "azul"; };
+  const lines = list.slice(0, 10).map((x, i) => `${i + 1}. "${x.headline ?? ""}" — cores dominantes: ${(x.colors ?? []).slice(0, 2).map((c) => `${c} (${fam(c)})`).join(", ") || "?"}; fonte: ${x.font || "?"}; esqueleto: ${x.skeleton || "?"}`);
+  return `# THUMBNAILS RECENTES DESTA PASTA (NÃO repita as famílias de cor dominantes, as fontes nem os esqueletos; varie)\n${lines.join("\n")}`;
+}
+
+/** Candidatas de referência visual: mesma categoria primeiro, sem repetir as usadas há pouco e com variedade de esqueleto/lettering */
+export function pickRefCandidates<T extends { id: string; tags: string[]; favorite?: boolean; obs?: ThumbObs | null }>(pool: T[], categories: string[], usedIds: Set<string>, n: number): T[] {
+  const score = (a: T) => (categories.length ? a.tags.filter((t) => categories.includes(t)).length * 10 : 0) + (a.favorite ? 4 : 0) + (a.obs ? 2 : 0) + (usedIds.has(a.id) ? -8 : 0) + Math.random() * 4;
+  const sorted = [...pool].sort((a, b) => score(b) - score(a));
+  const out: T[] = [], perSk = new Map<string, number>(), perLet = new Map<string, number>();
+  for (const a of sorted) {
+    const sk = (a.obs?.skeleton ?? "?").slice(0, 1), lt = a.obs?.lettering?.style_id ?? "?";
+    if ((perSk.get(sk) ?? 0) >= Math.max(2, Math.ceil(n / 4)) || (perLet.get(lt) ?? 0) >= Math.max(2, Math.ceil(n / 4))) continue;
+    out.push(a); perSk.set(sk, (perSk.get(sk) ?? 0) + 1); perLet.set(lt, (perLet.get(lt) ?? 0) + 1);
+    if (out.length >= n) break;
+  }
+  if (out.length < n) for (const a of sorted) { if (!out.includes(a)) out.push(a); if (out.length >= n) break; }
+  return out;
 }
 
 /** Classificação rápida de thumbnails sem categoria (usada antes do treino) já vem na observação; este texto é só de apoio na tela */
