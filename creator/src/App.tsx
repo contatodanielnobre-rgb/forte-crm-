@@ -16,6 +16,7 @@ const StudioEditor = lazy(() => import('./pages/studio/StudioEditor'))
 const StudioVideo = lazy(() => import('./pages/studio/StudioVideo'))
 const StudioLogos = lazy(() => import('./pages/studio/StudioLogos'))
 const StudioThumbs = lazy(() => import('./pages/studio/StudioThumbs'))
+const StudioLayouts = lazy(() => import('./pages/studio/StudioLayouts'))
 
 /**
  * Só equipe entra, e SEM tela de login própria: o Criador é uma ferramenta do admin e usa o login do CRM.
@@ -59,6 +60,7 @@ export default function App() {
             <Route path="video" element={<StudioVideo />} />
             <Route path="logos" element={<StudioLogos />} />
             <Route path="thumbs" element={<StudioThumbs />} />
+            <Route path="layouts" element={<StudioLayouts />} />
           </Route>
         </Route>
         <Route path="*" element={<Navigate to="/studio" replace />} />

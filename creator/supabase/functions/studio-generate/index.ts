@@ -28,6 +28,8 @@ import { brandImportIntro, brandImportSystem, filterImportColors } from "../_sha
 import { THUMB_CATEGORIES, THUMB_OBSERVE_SYSTEM, THUMB_SYNTH_SYSTEM, buildThumbPrompt, buildThumbRefinePrompt, compileThumbSkill, computeThumbStats, exemplarsBlock, learnedBlock, sanitizeObservations, sanitizeThumbAnalysis, sanitizeThumbConcepts, sanitizeThumbForm, thumbIdeateSystem, thumbIdeateUser, thumbObservePrompt, thumbSynthUser, type ThumbAnalysis, type ThumbAttach, type ThumbConcept, type ThumbObs } from "../_shared/thumb.ts";
 import { LOGO_INSPECT_PROMPT, LOGO_INSPECT_SYSTEM, LOGO_TRAIN_PROMPT, LOGO_TRAIN_SYSTEM, brandingPlanSystem, brandingPlanUser, buildLogoPrompt, buildLogoRefinePrompt, buildMockupPrompt, compileLogoSkill, defaultScenes, logoIdeateSystem, logoIdeateUser, sanitizeConcepts, sanitizeForm, sanitizeInspect, sanitizeLogoAnalysis, sanitizeScenes, type LogoAnalysis, type LogoAttach } from "../_shared/logo.ts";
 
+import { LAYOUT_ANALYZE_SYSTEM, LAYOUT_CATEGORIES, LAYOUT_OBSERVE_SYSTEM, LAYOUT_SYNTH_SYSTEM, buildMascotPrompt, buildSectionPrompt, buildSectionRefinePrompt, buildSystemBoardPrompt, compileLayoutSkill, computeLayoutStats, layoutAnalyzePrompt, layoutExemplarsBlock, layoutLearnedBlock, layoutObservePrompt, layoutPlanSystem, layoutPlanUser, layoutSynthUser, sanitizeLayoutAnalysis, sanitizeLayoutForm, sanitizeLayoutPlan, sanitizeLayoutSiteAnalysis, sanitizeSiteObs, type LayoutAnalysis, type LayoutAttach, type LayoutObs, type LayoutPagePlan, type LayoutPlan, type LayoutSectionPlan, type LayoutSiteAnalysis } from "../_shared/layout.ts";
+
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -267,6 +269,11 @@ Deno.serve(async (req) => {
     if (action === "thumb_train") return json(await thumbTrain(ctx, body));
     if (action === "thumb_ideate") return json(await thumbIdeate(ctx, body));
     if (action === "thumb_image") return json(await thumbImage(ctx, body));
+    if (action === "layout_observe") return json(await layoutObserve(ctx, body));
+    if (action === "layout_train") return json(await layoutTrain(ctx, body));
+    if (action === "layout_analyze") return json(await layoutAnalyze(ctx, body));
+    if (action === "layout_plan") return json(await layoutPlanAction(ctx, body));
+    if (action === "layout_image") return json(await layoutImage(ctx, body));
     throw new Fail("Ação desconhecida");
   } catch (e) {
     if (e instanceof Fail) return json({ error: e.message, code: e.code }, e.status);
@@ -958,6 +965,205 @@ async function thumbImage(ctx: Ctx, body: Record<string, unknown>) {
   } catch (e) {
     await ctx.admin.from("thumb_versions").update({ status: "error", error: (e instanceof Error ? e.message : String(e)).slice(0, 600) }).eq("id", id);
     await thumbRollup(ctx, ver.project_id);
+    throw e;
+  }
+}
+
+
+// ---------- criador de layouts de site (UX/UI) ----------
+/** pega no máximo n itens espalhados de uma lista (mantém o primeiro e o último) */
+function spread<T>(list: T[], n: number): T[] {
+  if (list.length <= n) return list;
+  return Array.from({ length: n }, (_, i) => list[Math.round((i * (list.length - 1)) / (n - 1))]);
+}
+
+/** Passo 1 do treino: a IA de visão lê UM site (até 10 recortes em ordem) e descreve estrutura, estilo, seções e conversão */
+async function layoutObserve(ctx: Ctx, body: Record<string, unknown>) {
+  const { key, model } = await textKey(ctx);
+  const { data: site } = await ctx.asCaller.from("layout_sites").select("id, brand_id, name, url, categories").eq("id", String(body.site_id ?? "")).single();
+  if (!site) throw new Fail("Site não encontrado ou sem permissão.", 404);
+  const { data: assets } = await ctx.admin.from("studio_assets").select("storage_path, thumb_path, site_order").eq("site_id", site.id).eq("kind", "site_ref").order("site_order", { ascending: true }).limit(60);
+  const list = spread(assets ?? [], 10);
+  if (!list.length) throw new Fail("Este site não tem imagens.", 400);
+  const content: unknown[] = [{ type: "text", text: layoutObservePrompt(list.length, { name: site.name, url: site.url, hint: (site.categories ?? []) as string[] }) }];
+  for (const a of list) content.push(imgPart(await download(ctx, a.storage_path), "high"));
+  let parsed: unknown; try { parsed = JSON.parse(await chat(key, model, LAYOUT_OBSERVE_SYSTEM, content, true)); } catch { throw new Fail("A IA devolveu uma análise fora do formato. Tente de novo.", 502); }
+  const obs = sanitizeSiteObs(parsed);
+  if (!obs) throw new Fail("A IA não conseguiu ler este site. Tente de novo.", 502);
+  const own = ((site.categories ?? []) as string[]).filter((t) => LAYOUT_CATEGORIES.some((c) => c.id === t));
+  await ctx.admin.from("layout_sites").update({ observation: obs, observed_at: new Date().toISOString(), categories: own.length ? own : obs.categories }).eq("id", site.id);
+  return { ok: true, observation: obs, categories: own.length ? own : obs.categories, model };
+}
+
+/** Passo 2 do treino: sintetiza o manual de estilo (geral + por categoria) a partir das leituras dos sites */
+async function layoutTrain(ctx: Ctx, body: Record<string, unknown>) {
+  const brandId = String(body.brand_id ?? "");
+  const { data: brand } = await ctx.asCaller.from("studio_brands").select("id, name, is_base, layout_skill_version, layout_analysis, layout_notes").eq("id", brandId).single();
+  if (!brand) throw new Fail("Pasta não encontrada.", 404);
+  const { data: sites } = await ctx.admin.from("layout_sites").select("id, name, categories, observation").eq("brand_id", brandId);
+  const total = sites?.length ?? 0;
+  if (!total) throw new Fail("Envie sites de referência antes de treinar.", 400, "no_refs");
+  const observed = (sites ?? []).filter((s) => s.observation);
+  const isCat = (t: string) => LAYOUT_CATEGORIES.some((c) => c.id === t);
+  const items = observed.map((s) => ({ o: s.observation as LayoutObs, name: s.name as string, tags: ((s.categories ?? []) as string[]).filter(isCat) }));
+  const stats = items.length ? computeLayoutStats(items.map((x) => ({ o: x.o, tags: x.tags }))) : undefined;
+  let analysis: LayoutAnalysis | null = null;
+  if (body.analyze === false && stats) analysis = { stats };
+  if (body.analyze !== false && items.length) {
+    const { key, model } = await textKey(ctx);
+    const groups: Record<string, number[]> = {};
+    items.forEach((x, i) => { for (const c of (x.tags.length ? x.tags : x.o.categories)) (groups[c] ??= []).push(i); });
+    let parsed: unknown; try { parsed = JSON.parse(await chat(key, model, LAYOUT_SYNTH_SYSTEM, layoutSynthUser(items.map((x, i) => ({ index: i, o: x.o, name: x.name })), groups), true)); } catch { throw new Fail("A IA devolveu um manual fora do formato. Tente de novo.", 502); }
+    analysis = sanitizeLayoutAnalysis(parsed, Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, v.length])), stats);
+  }
+  const version = (brand.layout_skill_version ?? 0) + 1;
+  const doc = compileLayoutSkill({ name: brand.name, isBase: brand.is_base, analysis: analysis ?? (brand.layout_analysis as LayoutAnalysis | null), refs: total, version, extra: brand.layout_notes });
+  await ctx.admin.from("studio_brands").update({ layout_analysis: analysis ?? brand.layout_analysis, layout_skill_doc: doc, layout_skill_version: version, layout_trained_at: new Date().toISOString(), layout_trained_refs: total }).eq("id", brandId);
+  return { ok: true, analysis, version, refs: total, observed: observed.length, doc };
+}
+
+async function layoutProjectCtx(ctx: Ctx, projectId: string) {
+  const { data: project } = await ctx.asCaller.from("layout_projects").select("*").eq("id", projectId).single();
+  if (!project) throw new Fail("Projeto de layout não encontrado ou sem permissão.", 404);
+  const { data: brand } = await ctx.asCaller.from("studio_brands").select("id, name, is_base, layout_skill_doc, layout_analysis").eq("id", project.brand_id).single();
+  const { data: base } = await ctx.admin.from("studio_brands").select("id, layout_skill_doc, layout_analysis").eq("is_base", true).maybeSingle();
+  return { project, brand: brand!, base };
+}
+
+type LayoutInput = { path: string; name: string; role: string; page?: string; order?: number; note?: string };
+async function siteTexts(urls: { url: string; role: string }[]): Promise<string> {
+  const out: string[] = [];
+  for (const u of urls.slice(0, 4)) {
+    try { const s = await fetchSite(u.url); if (s) out.push(`[${u.role === "current" ? "SITE ATUAL" : u.role === "competitor" ? "CONCORRENTE" : "INSPIRAÇÃO"}] ${s.url} — título: ${s.title}; descrição: ${s.description}; cores: ${s.colors.join(", ")}; fontes: ${s.fonts.join(", ")}; texto: ${s.text.slice(0, 1400)}`); } catch { /* link inacessível */ }
+  }
+  return out.join("\n");
+}
+
+/** Lê o site ATUAL do cliente (prints + links): conteúdo real, seções, problemas e oportunidades */
+async function layoutAnalyze(ctx: Ctx, body: Record<string, unknown>) {
+  const { key, model } = await textKey(ctx);
+  const { project } = await layoutProjectCtx(ctx, String(body.project_id ?? ""));
+  const form = sanitizeLayoutForm(project.form);
+  const current = ((project.inputs ?? []) as LayoutInput[]).filter((i) => i.role === "current").sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const sites = await siteTexts(form.urls.filter((u) => u.role === "current"));
+  if (!current.length && !sites) return { ok: true, analysis: null, skipped: true };
+  const picks = spread(current, 10);
+  const content: unknown[] = [{ type: "text", text: layoutAnalyzePrompt(picks.length, { form, sites }) }];
+  for (const i of picks) { try { content.push(imgPart(await download(ctx, i.path), "high")); } catch { /* arquivo sumiu */ } }
+  let parsed: unknown; try { parsed = JSON.parse(await chat(key, model, LAYOUT_ANALYZE_SYSTEM, content, true)); } catch { throw new Fail("A IA devolveu uma análise fora do formato. Tente de novo.", 502); }
+  const analysis = sanitizeLayoutSiteAnalysis(parsed);
+  await ctx.admin.from("layout_projects").update({ analysis }).eq("id", project.id);
+  return { ok: true, analysis, model };
+}
+
+/** Plano do redesign: sistema de design + páginas + seções com a copy exata */
+async function layoutPlanAction(ctx: Ctx, body: Record<string, unknown>) {
+  const { key, model } = await textKey(ctx);
+  const s = await settings(ctx);
+  const { project, brand, base } = await layoutProjectCtx(ctx, String(body.project_id ?? ""));
+  const form = sanitizeLayoutForm(project.form);
+  if (form.business.trim().length < 2) throw new Fail("Informe o nome do negócio.");
+  const inputs = ((project.inputs ?? []) as LayoutInput[]).filter((i) => i.role !== "current").slice(0, 3);
+  const imgs: unknown[] = [];
+  for (const i of inputs) { try { imgs.push(imgPart(await download(ctx, i.path), "auto")); } catch { /* arquivo sumiu */ } }
+  const sites = await siteTexts(form.urls);
+  const { data: pool } = await ctx.admin.from("layout_sites").select("name, categories, observation").in("brand_id", [brand.id, base?.id ?? brand.id]).not("observation", "is", null).limit(120);
+  const isCat = (t: string) => LAYOUT_CATEGORIES.some((c) => c.id === t);
+  const exemplars = layoutExemplarsBlock((pool ?? []).map((x) => ({ obs: x.observation as LayoutObs, name: x.name as string, tags: ((x.categories ?? []) as string[]).filter(isCat) })), form.categories);
+  const refine = body.feedback ? { previous: body.previous ?? project.plan ?? {}, feedback: String(body.feedback) } : null;
+  const sys = layoutPlanSystem({ baseDoc: base?.layout_skill_doc ?? null, brandDoc: brand.is_base ? null : brand.layout_skill_doc, extra: noteOf(s, "layout_rules"), categories: form.categories, exemplars });
+  const userText = layoutPlanUser({ form, analysis: project.analysis as LayoutSiteAnalysis | null, sites, inputs: inputs.map((i) => ({ role: i.role, note: i.note })), refine });
+  const out = await chat(key, model, sys, imgs.length ? [{ type: "text", text: userText }, ...imgs] : userText, true);
+  let parsed: unknown; try { parsed = JSON.parse(out); } catch { throw new Fail("A IA devolveu um plano fora do formato. Tente de novo.", 502); }
+  const planOut = sanitizeLayoutPlan(parsed, form);
+  if (!planOut.pages.length) throw new Fail("A IA não devolveu seções. Tente de novo com mais detalhes.", 502);
+  await ctx.admin.from("layout_projects").update({ plan: planOut, status: "planned" }).eq("id", project.id);
+  return { ok: true, model, plan: planOut };
+}
+
+async function layoutRollup(ctx: Ctx, projectId: string) {
+  const { data: rows } = await ctx.admin.from("layout_sections").select("status, approved").eq("project_id", projectId).eq("is_current", true);
+  const st = (rows ?? []).map((r) => r.status as string);
+  if (st.some((x) => x === "queued" || x === "running")) return;
+  const done = st.filter((x) => x === "done").length;
+  await ctx.admin.from("layout_projects").update({ status: !done ? "planned" : st.every((x) => x === "done") && (rows ?? []).every((r) => r.approved) ? "approved" : "ready" }).eq("id", projectId);
+}
+
+/** Gera a imagem de uma linha: guia de estilo, mascote ou seção (com as referências certas) */
+async function layoutImage(ctx: Ctx, body: Record<string, unknown>) {
+  const id = String(body.section_id ?? "");
+  const { data: row } = await ctx.asCaller.from("layout_sections").select("*").eq("id", id).single();
+  if (!row) throw new Fail("Seção não encontrada ou sem permissão.", 404);
+  await ctx.admin.from("layout_sections").update({ status: "running", error: null }).eq("id", id);
+  try {
+    const { project, brand, base } = await layoutProjectCtx(ctx, row.project_id);
+    const model = await pickImageModel(ctx, body.model_id, project.model_id);
+    const { key, baseUrl } = await providerKey(ctx, model.provider);
+    const form = sanitizeLayoutForm(project.form);
+    const plan = project.plan as LayoutPlan | null;
+    if (!plan?.design_system) throw new Fail("O projeto ainda não tem plano. Gere o plano primeiro.");
+    const refs: Ref[] = []; const attach: LayoutAttach[] = [];
+    const isSection = row.kind === "section";
+    const canRef = !!model.capabilities?.refs;
+    if (row.parent_id) {
+      const { data: parent } = await ctx.asCaller.from("layout_sections").select("storage_path").eq("id", row.parent_id).single();
+      if (!parent?.storage_path) throw new Fail("A versão original não foi encontrada.");
+      refs.push(await download(ctx, parent.storage_path)); attach.push({ role: "parent" });
+    }
+    const { data: cur } = await ctx.admin.from("layout_sections").select("id, kind, section_key, position, storage_path, status, is_current").eq("project_id", project.id).eq("is_current", true).eq("status", "done").order("position", { ascending: true });
+    if (canRef) {
+      if (isSection || row.kind === "mascot") { const sys = (cur ?? []).find((c) => c.kind === "system" && c.storage_path); if (sys) { refs.push(await download(ctx, sys.storage_path!)); attach.push({ role: "system" }); } }
+      const concept0 = (row.concept ?? {}) as Record<string, unknown>;
+      const mascotName = (plan.design_system.mascot?.name ?? "").toLowerCase();
+      const text = JSON.stringify(concept0).toLowerCase();
+      if (isSection && plan.design_system.mascot?.use && (text.includes("mascote") || (mascotName && text.includes(mascotName)))) { const m = (cur ?? []).find((c) => c.kind === "mascot" && c.storage_path); if (m) { refs.push(await download(ctx, m.storage_path!)); attach.push({ role: "mascot" }); } }
+      if (isSection && !row.parent_id) {
+        const hero = (cur ?? []).find((c) => c.kind === "section" && c.id !== row.id && c.storage_path);
+        if (hero) { refs.push(await download(ctx, hero.storage_path!)); attach.push({ role: "anchor", note: hero.section_key === "hero" ? "hero" : String(hero.section_key) }); }
+        // recorte do site atual que corresponde a esta seção (para reaproveitar o conteúdo real)
+        const currentInputs = ((project.inputs ?? []) as LayoutInput[]).filter((i) => i.role === "current").sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        if (currentInputs.length) {
+          const { data: sib } = await ctx.admin.from("layout_sections").select("position").eq("project_id", project.id).eq("kind", "section").eq("is_current", true).order("position", { ascending: true });
+          const idx = Math.max(0, (sib ?? []).findIndex((x) => x.position === row.position)), tot = Math.max(1, (sib ?? []).length);
+          const pick = currentInputs[Math.min(currentInputs.length - 1, Math.floor((idx / tot) * currentInputs.length))];
+          try { refs.push(await download(ctx, pick.path)); attach.push({ role: "current", note: `trecho ${idx + 1}/${tot} da rolagem` }); } catch { /* arquivo sumiu */ }
+        }
+        if (!hero || row.section_key === "hero") {
+          const catIds = [plan.category, ...form.categories].filter(Boolean);
+          const { data: tr } = await ctx.admin.from("layout_sites").select("id, categories, favorite").in("brand_id", [brand.id, base?.id ?? brand.id]).order("favorite", { ascending: false }).limit(60);
+          const match = (tr ?? []).filter((x) => ((x.categories ?? []) as string[]).some((c) => catIds.includes(c))).slice(0, 2);
+          for (const st of match) {
+            const { data: a } = await ctx.admin.from("studio_assets").select("storage_path, thumb_path").eq("site_id", st.id).eq("kind", "site_ref").order("site_order", { ascending: true }).limit(1);
+            if (a?.[0]) { refs.push(await download(ctx, a[0].thumb_path ?? a[0].storage_path)); attach.push({ role: "style" }); }
+          }
+        }
+        if (row.section_key === "hero") for (const i of ((project.inputs ?? []) as LayoutInput[]).filter((x) => x.role !== "current").slice(0, 2)) { try { refs.push(await download(ctx, i.path)); attach.push({ role: i.role === "competitor" ? "competitor" : "inspiration" }); } catch { /* arquivo sumiu */ } }
+      }
+    }
+    const an = ((brand.layout_analysis as LayoutAnalysis | null)?.categories?.[plan.category] ? brand.layout_analysis : base?.layout_analysis ?? brand.layout_analysis) as LayoutAnalysis | null;
+    const learned = layoutLearnedBlock(an, plan.category ? [plan.category] : [], false);
+    const concept = (row.concept ?? {}) as LayoutSectionPlan;
+    const { count } = await ctx.admin.from("layout_sections").select("id", { count: "exact", head: true }).eq("project_id", project.id).eq("kind", "section").eq("is_current", true).eq("page_key", row.page_key);
+    const { count: nBefore } = await ctx.admin.from("layout_sections").select("id", { count: "exact", head: true }).eq("project_id", project.id).eq("kind", "section").eq("is_current", true).eq("page_key", row.page_key).lt("position", row.position);
+    let prompt: string, aspect = form.format === "mobile" ? "9:16" : "16:9";
+    if (row.kind === "system") { aspect = "16:9"; prompt = buildSystemBoardPrompt({ form, plan, attach, learned }); }
+    else if (row.kind === "mascot") { aspect = "16:9"; prompt = buildMascotPrompt({ form, plan, attach }); }
+    else if (row.parent_id && row.feedback) prompt = buildSectionRefinePrompt({ feedback: row.feedback, attach, form });
+    else {
+      const page: LayoutPagePlan = (plan.pages.find((p) => p.key === row.page_key) ?? plan.pages[0]) as LayoutPagePlan;
+      prompt = buildSectionPrompt({ form, plan, page: { ...page, name: row.page_name }, section: concept, index: Number(nBefore ?? 0) + 1, total: Math.max(Number(count ?? 1), 1), attach, learned, feedback: row.feedback });
+    }
+    const raw = await runProvider({ provider: model.provider, apiModel: model.api_model, key, baseUrl, prompt, aspect, quality: String(body.quality ?? project.quality ?? "medium"), refs });
+    const fin = await finalize(raw.bytes, aspect);
+    const path = `${brand.id}/layouts/${project.id}/${row.id}.png`;
+    const up = await ctx.admin.storage.from("studio").upload(path, fin.bytes, { contentType: "image/png", upsert: true });
+    if (up.error) throw new Fail(`Falha ao salvar a imagem: ${up.error.message}`, 500);
+    await ctx.admin.from("layout_sections").update({ status: "done", storage_path: path, width: fin.w ?? null, height: fin.h ?? null, prompt: prompt.slice(0, 14000), usage: raw.usage ?? null, cost_usd: costFromUsage(model.provider, raw.usage) }).eq("id", id);
+    await layoutRollup(ctx, project.id);
+    return { ok: true, path };
+  } catch (e) {
+    await ctx.admin.from("layout_sections").update({ status: "error", error: (e instanceof Error ? e.message : String(e)).slice(0, 600) }).eq("id", id);
+    await layoutRollup(ctx, row.project_id);
     throw e;
   }
 }

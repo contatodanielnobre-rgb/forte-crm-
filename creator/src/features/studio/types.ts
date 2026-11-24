@@ -49,6 +49,13 @@ export interface Brand {
   thumb_trained_at?: string | null
   thumb_trained_refs?: number
   thumb_notes?: string | null
+  /** treinamento de layouts de site (UX/UI) */
+  layout_skill_doc?: string | null
+  layout_analysis?: import('@/features/layout/types').LayoutAnalysis | null
+  layout_skill_version?: number
+  layout_trained_at?: string | null
+  layout_trained_refs?: number
+  layout_notes?: string | null
   created_at: string
   updated_at: string
 }
@@ -58,7 +65,7 @@ export interface StyleAnalysis {
   recurring_elements?: string[]; avoid?: string[]; summary?: string
 }
 
-export type AssetKind = 'reference' | 'logo' | 'character' | 'object' | 'competitor' | 'logo_ref' | 'thumb_ref'
+export type AssetKind = 'reference' | 'logo' | 'character' | 'object' | 'competitor' | 'logo_ref' | 'thumb_ref' | 'site_ref'
 
 export interface StudioAsset {
   id: string
@@ -78,6 +85,9 @@ export interface StudioAsset {
   saved?: boolean
   /** thumb_ref: observação da IA de visão (posição, expressão, texto, paleta…) */
   meta?: import('@/features/thumb/types').ThumbObs | null
+  /** site_ref: o site de referência a que este recorte pertence e a ordem de rolagem */
+  site_id?: string | null
+  site_order?: number
   created_at: string
 }
 

@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { BrainCircuit, Calculator, Clapperboard, Eraser, FolderOpen, Lightbulb, Plug, PanelTop, Rocket, Shapes, WandSparkles } from 'lucide-react'
+import { BrainCircuit, Calculator, Clapperboard, Eraser, FolderOpen, Lightbulb, Plug, LayoutTemplate, PanelTop, Rocket, Shapes, WandSparkles } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { cn } from '@/lib/utils'
 import { ensureBase, useBrands, useProviderStatus, useStudioSettings } from '@/features/studio/data'
@@ -24,6 +24,7 @@ export default function StudioShell() {
     { to: '/studio/ideas', label: 'Criador de prompts', icon: Lightbulb, tour: 'studio-tab-ideas' },
     { to: '/studio/logos', label: 'Criador de logos', icon: Shapes, tour: 'studio-tab-logos' },
     { to: '/studio/thumbs', label: 'Criador de thumbnails', icon: PanelTop, tour: 'studio-tab-thumbs' },
+    { to: '/studio/layouts', label: 'Criador de layouts', icon: LayoutTemplate, tour: 'studio-tab-layouts' },
     { to: '/studio/video', label: 'Editor de vídeo', icon: Clapperboard, tour: 'studio-tab-video' },
     { to: '/studio/editor', label: 'Remover IA', icon: Eraser, tour: 'studio-tab-editor' },
     { to: '/studio/library', label: 'Biblioteca', icon: FolderOpen, tour: 'studio-tab-library' },
