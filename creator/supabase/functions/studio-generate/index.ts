@@ -242,46 +242,102 @@ Deno.serve(async (req) => {
     const { data: me } = await asCaller.auth.getUser();
     if (!me?.user) throw new Fail("Sessão inválida", 401);
     const { data: prof } = await admin.from("profiles").select("role, active").eq("id", me.user.id).single();
-    if (!prof?.active || !["admin", "collaborator"].includes(prof.role)) throw new Fail("Sem permissão", 403);
+    if (!prof?.active || !["admin", "collaborator", "customer"].includes(prof.role)) throw new Fail("Sem permissão", 403);
 
     const body = await req.json();
     const action = String(body.action ?? "");
     const ctx = { asCaller, admin, userId: me.user.id };
-    if (action === "image" || action === "edit") return json(await generateImage(ctx, body, action === "edit"));
-    if (action === "plan") return json(await plan(ctx, body));
-    if (action === "enhance") return json(await enhance(ctx, body));
-    if (action === "train") return json(await train(ctx, body));
-    if (action === "ideate") return json(await ideate(ctx, body));
-    if (action === "train_agent") return json(await trainAgent(ctx));
-    if (action === "brand_brief") return json(await brandBrief(ctx, body));
-    if (action === "train_styles") return json(await trainStyles(ctx));
-    if (action === "read_text") return json(await readText(ctx, body));
-    if (action === "transcribe") return json(await transcribe(ctx, body));
-    if (action === "describe_asset") return json(await describeAsset(ctx, body));
-    if (action === "brand_import") return json(await brandImport(ctx, body));
-    if (action === "video_analyze") return json(await videoAnalyze(ctx, body));
-    if (action === "logo_train") return json(await logoTrain(ctx, body));
-    if (action === "logo_ideate") return json(await logoIdeate(ctx, body));
-    if (action === "logo_image") return json(await logoImage(ctx, body));
-    if (action === "logo_inspect") return json(await logoInspect(ctx, body));
-    if (action === "logo_branding_plan") return json(await logoBrandingPlan(ctx, body));
-    if (action === "logo_branding_image") return json(await logoBrandingImage(ctx, body));
-    if (action === "thumb_observe") return json(await thumbObserve(ctx, body));
-    if (action === "thumb_train") return json(await thumbTrain(ctx, body));
-    if (action === "font_analyze") return json(await fontAnalyze(ctx, body));
-    if (action === "thumb_ideate") return json(await thumbIdeate(ctx, body));
-    if (action === "thumb_image") return json(await thumbImage(ctx, body));
-    if (action === "layout_observe") return json(await layoutObserve(ctx, body));
-    if (action === "layout_train") return json(await layoutTrain(ctx, body));
-    if (action === "layout_analyze") return json(await layoutAnalyze(ctx, body));
-    if (action === "layout_plan") return json(await layoutPlanAction(ctx, body));
-    if (action === "layout_image") return json(await layoutImage(ctx, body));
-    throw new Fail("Ação desconhecida");
+    // Kreator AI: o cliente que paga a mensalidade usa só as ações de criação, gasta créditos e nunca vê os bastidores
+    if (prof.role === "customer") return json(await customerCall(ctx, action, body));
+    return json(await route(ctx, action, body));
   } catch (e) {
     if (e instanceof Fail) return json({ error: e.message, code: e.code }, e.status);
     return json({ error: e instanceof Error ? e.message : String(e) }, 500);
   }
 });
+
+// ---------- Kreator AI: permissões e créditos do cliente ----------
+/** Treinar as ferramentas é só dos administradores: o cliente usa o que foi treinado. */
+const ADMIN_ONLY = new Set(["train_agent", "train_styles", "logo_train", "thumb_observe", "thumb_train", "layout_observe", "layout_train", "video_analyze"]);
+/** Créditos por ação (1 crédito = 1 imagem). Ações que não aparecem aqui e são permitidas custam 0. */
+const CREDITS: Record<string, number> = {
+  image: 1, edit: 1, thumb_image: 1, logo_image: 1, logo_branding_image: 1, layout_image: 1,
+  thumb_ideate: 1, logo_ideate: 1, layout_plan: 1, ideate: 1, plan: 1, train: 1, brand_brief: 1, brand_import: 1,
+};
+const CUSTOMER_FREE = new Set(["enhance", "read_text", "transcribe", "describe_asset", "logo_inspect", "logo_branding_plan", "layout_analyze", "font_analyze"]);
+/** ação de imagem → tabela e campo do id (para apagar o prompt, que contém o treino, e registrar o custo real) */
+const IMAGE_ROWS: Record<string, [string, string]> = {
+  image: ["studio_images", "image_id"], edit: ["studio_images", "image_id"], thumb_image: ["thumb_versions", "version_id"],
+  logo_image: ["logo_versions", "version_id"], logo_branding_image: ["logo_brandings", "branding_id"], layout_image: ["layout_sections", "section_id"],
+};
+
+async function customerCall(ctx: Ctx, action: string, body: Record<string, unknown>) {
+  if (ADMIN_ONLY.has(action)) throw new Fail("O treinamento das ferramentas é exclusivo dos administradores do Kreator AI.", 403, "admin_only");
+  const cost = CREDITS[action] ?? 0;
+  if (cost === 0 && !CUSTOMER_FREE.has(action)) throw new Fail("Ação não disponível no seu plano.", 403);
+  const ref = `${action}:${String(body.image_id ?? body.version_id ?? body.branding_id ?? body.section_id ?? crypto.randomUUID())}:${Date.now()}`;
+  let balance: number | null = null;
+  if (cost > 0) {
+    const { data, error } = await ctx.admin.rpc("kreator_spend", { p_user: ctx.userId, p_amount: cost, p_action: action, p_ref: ref });
+    if (error) {
+      if (/insufficient_credits/.test(error.message)) throw new Fail("Seus créditos acabaram. Escolha um plano ou aguarde a renovação para continuar criando.", 402, "no_credits");
+      if (/plan_expired/.test(error.message)) throw new Fail("Seu plano venceu. Renove para voltar a criar.", 402, "plan_expired");
+      throw new Fail(error.message, 500);
+    }
+    balance = Number(data);
+  }
+  try {
+    const out = await route(ctx, action, body) as Record<string, unknown>;
+    // bastidores (prompts e manuais do treino) nunca vão para o navegador do cliente
+    if (out && typeof out === "object") delete out.debug;
+    const row = IMAGE_ROWS[action];
+    if (row && out?.ok) {
+      const id = String(body[row[1]] ?? "");
+      const { data: r } = await ctx.admin.from(row[0]).select("cost_usd").eq("id", id).maybeSingle();
+      await ctx.admin.from(row[0]).update({ prompt: null }).eq("id", id);
+      if (r?.cost_usd != null) await ctx.admin.rpc("kreator_set_cost", { p_user: ctx.userId, p_ref: ref, p_cost: r.cost_usd });
+    }
+    return { ...out, credits_left: balance };
+  } catch (e) {
+    if (cost > 0) await ctx.admin.rpc("kreator_refund", { p_user: ctx.userId, p_amount: cost, p_action: action, p_ref: ref });
+    throw e;
+  }
+}
+
+async function route(ctx: Ctx, action: string, body: Record<string, unknown>): Promise<unknown> {
+  {
+    if (action === "image" || action === "edit") return await generateImage(ctx, body, action === "edit");
+    if (action === "plan") return await plan(ctx, body);
+    if (action === "enhance") return await enhance(ctx, body);
+    if (action === "train") return await train(ctx, body);
+    if (action === "ideate") return await ideate(ctx, body);
+    if (action === "train_agent") return await trainAgent(ctx);
+    if (action === "brand_brief") return await brandBrief(ctx, body);
+    if (action === "train_styles") return await trainStyles(ctx);
+    if (action === "read_text") return await readText(ctx, body);
+    if (action === "transcribe") return await transcribe(ctx, body);
+    if (action === "describe_asset") return await describeAsset(ctx, body);
+    if (action === "brand_import") return await brandImport(ctx, body);
+    if (action === "video_analyze") return await videoAnalyze(ctx, body);
+    if (action === "logo_train") return await logoTrain(ctx, body);
+    if (action === "logo_ideate") return await logoIdeate(ctx, body);
+    if (action === "logo_image") return await logoImage(ctx, body);
+    if (action === "logo_inspect") return await logoInspect(ctx, body);
+    if (action === "logo_branding_plan") return await logoBrandingPlan(ctx, body);
+    if (action === "logo_branding_image") return await logoBrandingImage(ctx, body);
+    if (action === "thumb_observe") return await thumbObserve(ctx, body);
+    if (action === "thumb_train") return await thumbTrain(ctx, body);
+    if (action === "font_analyze") return await fontAnalyze(ctx, body);
+    if (action === "thumb_ideate") return await thumbIdeate(ctx, body);
+    if (action === "thumb_image") return await thumbImage(ctx, body);
+    if (action === "layout_observe") return await layoutObserve(ctx, body);
+    if (action === "layout_train") return await layoutTrain(ctx, body);
+    if (action === "layout_analyze") return await layoutAnalyze(ctx, body);
+    if (action === "layout_plan") return await layoutPlanAction(ctx, body);
+    if (action === "layout_image") return await layoutImage(ctx, body);
+    throw new Fail("Ação desconhecida");
+  }
+}
 
 interface Ctx { asCaller: SupabaseClient; admin: SupabaseClient; userId: string }
 
