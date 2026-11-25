@@ -2,6 +2,7 @@
 // Usado pela Edge Function studio-generate (Deno) E pelo servidor de demonstração (Node): o mesmo texto vai para o modelo nos dois lugares.
 import { THUMB_CATEGORIES, THUMB_LETTERING, THUMB_REF_FONTS, THUMB_SKILL, THUMB_TYPE_GUIDE, categoryById, lettering } from "./thumb-skill.ts";
 export { THUMB_CATEGORIES, THUMB_LETTERING, THUMB_REF_FONTS, THUMB_SKILL, THUMB_TYPE_GUIDE, categoryById, lettering };
+import { fontProfileLines, fontLabel, learnedFontList, learnedFontsBlock, type FontProfile } from "./fonts.ts";
 const LET_IDS = THUMB_LETTERING.map((l) => l.id);
 
 export const clip = (s: unknown, n: number) => String(s ?? "").trim().slice(0, n);
@@ -94,6 +95,7 @@ export interface ThumbCatAnalysis { count?: number; summary?: string; compositio
 export interface ThumbStats { fonts: [string, number][]; weights: [string, number][]; highlights: [string, number][]; arrow_pct: number; face_avg: number; text_avg: number; n: number; text_pct: number; no_person_pct: number; positions: [string, number][]; faces: [string, number][]; gaze: [string, number][]; expressions: [string, number][]; lettering: [string, number][]; skeleton: [string, number][]; realism: [string, number][]; saturation: [string, number][]; behind_pct: number }
 export interface ThumbAnalysis {
   stats?: Record<string, ThumbStats>
+  fonts?: Record<string, FontProfile>
   general?: { summary?: string; composition?: string; faces?: string; color?: string; text_policy?: string; backgrounds?: string; effects?: string; do?: string[]; dont?: string[] }
   categories?: Record<string, ThumbCatAnalysis>
 }
@@ -109,7 +111,7 @@ export function thumbSynthUser(obs: { index: number; o: ThumbObs }[], groups: Re
 }`;
 }
 
-export function sanitizeThumbAnalysis(raw: unknown, counts: Record<string, number> = {}, stats?: Record<string, ThumbStats>): ThumbAnalysis {
+export function sanitizeThumbAnalysis(raw: unknown, counts: Record<string, number> = {}, stats?: Record<string, ThumbStats>, fonts?: Record<string, FontProfile>): ThumbAnalysis {
   const r = rec(raw), g = rec(r.general), c = rec(r.categories);
   const categories: Record<string, ThumbCatAnalysis> = {};
   for (const [id, v0] of Object.entries(c)) {
@@ -117,7 +119,7 @@ export function sanitizeThumbAnalysis(raw: unknown, counts: Record<string, numbe
     const v = rec(v0);
     categories[id] = { count: counts[id] ?? 0, summary: clip(v.summary, 500), composition: clip(v.composition, 600), character: clip(v.character, 500), expression: clip(v.expression, 400), scene: clip(v.scene, 500), palette: clip(v.palette, 400), text: clip(v.text, 500), typography: clip(v.typography, 600), layout: clip(v.layout, 600), props: clip(v.props, 400), object_logic: clip(v.object_logic, 400), realism: clip(v.realism, 400), do: arr(v.do, 6), dont: arr(v.dont, 6) };
   }
-  return { stats, general: { summary: clip(g.summary, 600), composition: clip(g.composition, 700), faces: clip(g.faces, 600), color: clip(g.color, 600), text_policy: clip(g.text_policy, 700), backgrounds: clip(g.backgrounds, 500), effects: clip(g.effects, 500), do: arr(g.do, 8), dont: arr(g.dont, 8) }, categories };
+  return { stats, fonts, general: { summary: clip(g.summary, 600), composition: clip(g.composition, 700), faces: clip(g.faces, 600), color: clip(g.color, 600), text_policy: clip(g.text_policy, 700), backgrounds: clip(g.backgrounds, 500), effects: clip(g.effects, 500), do: arr(g.do, 8), dont: arr(g.dont, 8) }, categories };
 }
 
 /** Documento de treinamento de thumbnails (o que fica salvo na pasta e é lido nas próximas criações) */
@@ -133,6 +135,7 @@ export function compileThumbSkill(o: { name: string; isBase: boolean; analysis: 
   for (const [id, c] of Object.entries(a?.categories ?? {})) {
     lines.push(`## ${categoryById(id)?.label ?? id}${c.count ? ` (${c.count} refs)` : ""}`, L("**Resumo:**", c.summary), L("**Composição:**", c.composition), L("**Personagem:**", c.character), L("**Expressão:**", c.expression), L("**Cenário e luz:**", c.scene), L("**Paleta:**", c.palette), L("**Texto:**", c.text), L("**Lettering:**", c.typography), L("**Esqueleto de composição:**", c.layout), L("**Objetos:**", c.props), L("**Lógica dos objetos:**", c.object_logic), L("**Realismo:**", c.realism), L("**Sempre:**", c.do), L("**Nunca:**", c.dont));
   }
+  if (a?.fonts) lines.push(fontProfileLines(a.fonts, (id) => categoryById(id)?.label ?? id));
   if (a?.stats) lines.push(statsLines(a.stats));
   if (o.extra) lines.push(`**Regras extras escritas pela equipe:**\n${o.extra}\n`);
   return lines.filter((l) => l !== "").join("\n");
@@ -213,23 +216,26 @@ export function directionBlock(f: ThumbForm): string {
 }
 
 /** Guia de fontes e uso do texto das categorias escolhidas (ou de todas, se a IA decide) */
-export function typeGuideBlock(categories: string[]): string {
+/** A categoria tem leitura de fontes suficiente (pelo menos 2 fontes lidas) para mandar no lugar do guia fixo */
+export const hasLearned = (fp: Record<string, FontProfile> | null | undefined, id: string) => (fp?.[id]?.fonts?.length ?? 0) >= 2 && (fp?.[id]?.fonts.reduce((a, f) => a + f.count, 0) ?? 0) >= 3;
+export function typeGuideBlock(categories: string[], fp?: Record<string, FontProfile> | null): string {
   const ids = categories.length ? categories : Object.keys(THUMB_TYPE_GUIDE);
   const rows = ids.filter((id) => THUMB_TYPE_GUIDE[id]).map((id) => {
     const g = THUMB_TYPE_GUIDE[id];
-    return `- ${categoryById(id)?.label ?? id} [${id}] · texto: ${g.text === "none" ? "QUASE NUNCA (gere SEM texto, salvo ambiental)" : g.text === "rare" ? "raro (no máximo 1–2 símbolos)" : "sim"} · fontes: ${g.fonts.map((f) => `${f.name} ${f.weights}`).join(" / ")} · ${g.depth} · ${g.position} · ${g.case} · cores: ${g.colors} · destaque: ${g.emphasis} · setas: ${g.arrows}`;
+    return `- ${categoryById(id)?.label ?? id} [${id}] · texto: ${g.text === "none" ? "QUASE NUNCA (gere SEM texto, salvo ambiental)" : g.text === "rare" ? "raro (no máximo 1–2 símbolos)" : "sim"} · ${hasLearned(fp, id) ? "fontes: ver FONTES APRENDIDAS abaixo" : `fontes: ${g.fonts.map((f) => `${f.name} ${f.weights}`).join(" / ")}`} · ${g.depth} · ${g.position} · ${g.case} · cores: ${g.colors} · destaque: ${g.emphasis} · setas: ${g.arrows}`;
   });
-  return `# GUIA DE FONTES E USO DO TEXTO POR NICHO (regra do usuário; vem das suas thumbnails)\nSe o usuário NÃO escolheu a fonte, escolha UMA das fontes do nicho (varie entre os conceitos), preencha "font_hint" com o nome real e siga profundidade, posição, caixa, cores, destaque e setas do nicho. Nichos "sem texto" ficam SEM texto, a menos que o usuário peça texto ou configure o texto.\n${rows.join("\n")}`;
+  return `# GUIA DE FONTES E USO DO TEXTO POR NICHO (regra do usuário; vem das suas thumbnails)\nSe o usuário NÃO escolheu a fonte, escolha UMA das fontes do nicho (varie entre os conceitos; quando houver FONTES APRENDIDAS, use só as delas), preencha "font_hint" com o nome real e siga profundidade, posição, caixa, cores, destaque e setas do nicho. Nichos "sem texto" ficam SEM texto, a menos que o usuário peça texto ou configure o texto.\n${rows.join("\n")}`;
 }
 
-export function thumbIdeateSystem(o: { baseDoc?: string | null; brandDoc?: string | null; extra?: string | null; count: number; categories: string[] }): string {
+export function thumbIdeateSystem(o: { baseDoc?: string | null; brandDoc?: string | null; extra?: string | null; count: number; categories: string[]; fonts?: Record<string, FontProfile> | null }): string {
   const sel = o.categories.length ? THUMB_CATEGORIES.filter((c) => o.categories.includes(c.id)) : THUMB_CATEGORIES;
   return `${THUMB_SKILL}
 
 # MANUAIS DAS CATEGORIAS${o.categories.length ? " ESCOLHIDAS" : " (escolha as melhores para o tema)"}
 ${sel.map((c) => `## ${c.label} [${c.id}]\n${c.playbook}`).join("\n\n")}
 
-${typeGuideBlock(o.categories)}
+${typeGuideBlock(o.categories, o.fonts)}
+${learnedFontsBlock(o.fonts ?? null, (o.categories.length ? o.categories : Object.keys(o.fonts ?? {})).filter((c) => hasLearned(o.fonts, c)), (id) => categoryById(id)?.label ?? id)}
 
 ${o.baseDoc ? `# TREINAMENTO DA AGÊNCIA (aprendido das thumbnails de referência)\n${o.baseDoc}\n` : ""}${o.brandDoc ? `# TREINAMENTO DESTE CANAL\n${o.brandDoc}\n` : ""}${o.extra ? `# REGRAS EXTRAS DA AGÊNCIA\n${o.extra}\n` : ""}
 # SUA TAREFA AGORA
@@ -289,9 +295,9 @@ export interface ThumbConcept {
   index?: number; name: string; angle: string; category: string; hook: string; composition: string; objects?: string; skeleton?: string
   characters: { who: string; placement: string; expression: string; pose: string; outfit: string; gaze?: string; framing?: string; angle?: string }[]
   subjects?: { who: string; how: string }[]; palette_from?: string; refs?: { n: number; id?: string; take: string }[]
-  scene: string; elements: string[]; colors: string[]; text: { mode: string; headline: string; sub: string; placement: string; style: string; style_id?: string; font_hint?: string; look?: string; container?: string; integration?: string }; text_reason: string; image_brief: string
+  scene: string; elements: string[]; colors: string[]; text: { mode: string; headline: string; sub: string; placement: string; style: string; style_id?: string; font_hint?: string; font_learned?: boolean; look?: string; container?: string; integration?: string }; text_reason: string; image_brief: string
 }
-export function sanitizeThumbConcepts(raw: unknown, want: number, form: ThumbForm, maxRef = 0): { analysis: string; concepts: ThumbConcept[] } {
+export function sanitizeThumbConcepts(raw: unknown, want: number, form: ThumbForm, maxRef = 0, fonts?: Record<string, FontProfile> | null): { analysis: string; concepts: ThumbConcept[] } {
   const r = rec(raw);
   const list = (Array.isArray(r.concepts) ? r.concepts : []) as Record<string, unknown>[];
   const concepts = list.map((c, i): ThumbConcept => {
@@ -310,7 +316,7 @@ export function sanitizeThumbConcepts(raw: unknown, want: number, form: ThumbFor
       text: { mode, headline, sub: mode === "none" ? "" : clip(t.sub, 80), placement: clip(t.placement, 160), style: clip(t.style, 200), style_id: LET_IDS.includes(clip(t.style_id, 30)) ? clip(t.style_id, 30) : "", font_hint: clip(String(t.font_hint ?? '').split(/[,;(—–]/)[0], 40), look: clip(t.look, 220), container: clip(t.container, 40), integration: clip(t.integration, 50) }, text_reason: clip(c.text_reason, 240), image_brief: clip(c.image_brief, 1800),
     };
   }).filter((c) => c.image_brief || c.composition).slice(0, want).map((c, i) => applyDirection(c, form, i)).map((c) => ({ ...c, refs: (c.refs ?? []).filter((x) => maxRef === 0 || x.n <= maxRef) }));
-  return { analysis: clip(r.analysis, 500), concepts: diversify(concepts, form) };
+  return { analysis: clip(r.analysis, 500), concepts: diversify(concepts, form, fonts) };
 }
 
 /** Garante que o que o usuário definiu vale em TODAS as ideias, mesmo que a IA tenha esquecido (o resto continua sendo decisão dela) */
@@ -421,7 +427,7 @@ const EXPRS = ["shock", "serious", "open_mouth", "smirk", "doubt", "think", "fea
 const POSES = ["ombros firmes, mãos fora de quadro", "uma mão segurando o próprio queixo", "apontando para o elemento principal", "inclinado para a frente, encarando", "mão aberta mostrando o objeto-chave"];
 const BANNED = /(bra[cç]os? cruzados?|crossed arms|camiseta|t-?shirt|rel[oó]gio|watch|tatuagem|tattoo)/i;
 const DISPLAY_FONTS = ["Anton", "Bebas Neue", "Oswald", "Montserrat ExtraBold", "Archivo Black", "Poppins Bold", "Playfair Display Black", "Cinzel Bold", "Inter ExtraBold", "Open Sans ExtraBold", "Bangers", "Alfa Slab One", "Barlow Condensed Bold", "League Gothic"];
-export function diversify(list: ThumbConcept[], form: ThumbForm): ThumbConcept[] {
+export function diversify(list: ThumbConcept[], form: ThumbForm, fonts?: Record<string, FontProfile> | null): ThumbConcept[] {
   const userTxt = `${form.notes ?? ""} ${form.brief} ${form.avoid ?? ""}`;
   const allowBanned = BANNED.test(userTxt);
   const usedFont = new Set<string>(), usedExpr = new Map<string, number>(), usedFrame = new Map<string, number>();
@@ -444,8 +450,22 @@ export function diversify(list: ThumbConcept[], form: ThumbForm): ThumbConcept[]
     });
     if (out.text.mode === "short" && !form.dir?.text_font) {
       const fam = (out.text.font_hint || "").split(/ (Thin|Light|Regular|Medium|SemiBold|Bold|ExtraBold|Black)/)[0].toLowerCase();
+      const learned = hasLearned(fonts, out.category) ? learnedFontList(fonts, out.category) : [];
+      if (learned.length) {
+        // fontes LIDAS das imagens do usuário nesta categoria: a IA não inventa; sorteia (ponderado) entre as não usadas nos outros conceitos
+        const inList = learned.some((f) => f.family.toLowerCase() === fam);
+        if (!inList || usedFont.has(fam)) {
+          const free = learned.filter((f) => !usedFont.has(f.family.toLowerCase())), pool = free.length ? free : learned;
+          const tot = pool.reduce((a, f) => a + f.count, 0); let r = Math.random() * tot, pick = pool[0];
+          for (const f of pool) { r -= f.count; if (r <= 0) { pick = f; break; } }
+          out.text.font_hint = fontLabel(pick);
+        }
+        out.text.font_learned = true;
+        usedFont.add((out.text.font_hint || "").split(/ (Thin|ExtraLight|Light|Regular|Medium|SemiBold|Bold|ExtraBold|Black)/)[0].toLowerCase());
+      } else {
       if (!fam || usedFont.has(fam)) { const g = THUMB_TYPE_GUIDE[out.category]?.fonts.map((f) => f.name) ?? []; const pool = [...g, ...DISPLAY_FONTS].filter((f) => !usedFont.has(f.split(" ")[0].toLowerCase())); out.text.font_hint = pool[i % Math.max(1, pool.length)] ?? DISPLAY_FONTS[i % DISPLAY_FONTS.length]; }
       usedFont.add((out.text.font_hint || "").split(" ")[0].toLowerCase());
+      }
     }
     return out;
   });

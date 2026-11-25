@@ -25,10 +25,11 @@ import { openaiImage, costFromUsage as usageCost } from "../_shared/openai-image
 import { DESCRIBE_SYSTEM, describePrompt, isCast, selectImageRefs, transcribeAudio, vocabularyPrompt, type Attachment, type CastItem, type CompetitorPlan, type LogoPlan } from "../_shared/elements.ts";
 import { ANALYZE_SYSTEM, sanitizePlan, sanitizeStyle, videoPlanSystem, videoPlanUser, type VideoPlanInput } from "../_shared/video.ts";
 import { brandImportIntro, brandImportSystem, filterImportColors } from "../_shared/import.ts";
-import { THUMB_CATEGORIES, THUMB_OBSERVE_SYSTEM, THUMB_SYNTH_SYSTEM, buildThumbPrompt, buildThumbRefinePrompt, compileThumbSkill, computeThumbStats, exemplarsBlock, learnedBlock, pickRefCandidates, recentBlock, sanitizeObservations, sanitizeThumbAnalysis, sanitizeThumbConcepts, sanitizeThumbForm, thumbIdeateSystem, thumbIdeateUser, thumbObservePrompt, thumbSynthUser, type ThumbAnalysis, type ThumbAttach, type ThumbConcept, type ThumbObs } from "../_shared/thumb.ts";
+import { THUMB_CATEGORIES, THUMB_OBSERVE_SYSTEM, THUMB_SYNTH_SYSTEM, buildThumbPrompt, buildThumbRefinePrompt, compileThumbSkill, computeThumbStats, exemplarsBlock, learnedBlock, pickRefCandidates, recentBlock, sanitizeObservations, sanitizeThumbAnalysis, sanitizeThumbConcepts, sanitizeThumbForm, thumbIdeateSystem, thumbIdeateUser, thumbObservePrompt, thumbSynthUser, hasLearned, type ThumbAnalysis, type ThumbAttach, type ThumbConcept, type ThumbObs } from "../_shared/thumb.ts";
+import { FONT_ANALYZE_SYSTEM, computeFontProfile, fontAnalyzePrompt, sanitizeFontMatch, type Cand, type FontMatch, type FontProfile } from "../_shared/fonts.ts";
 import { LOGO_INSPECT_PROMPT, LOGO_INSPECT_SYSTEM, LOGO_TRAIN_PROMPT, LOGO_TRAIN_SYSTEM, brandingPlanSystem, brandingPlanUser, buildLogoPrompt, buildLogoRefinePrompt, buildMockupPrompt, compileLogoSkill, defaultScenes, logoIdeateSystem, logoIdeateUser, sanitizeConcepts, sanitizeForm, sanitizeInspect, sanitizeLogoAnalysis, sanitizeScenes, type LogoAnalysis, type LogoAttach } from "../_shared/logo.ts";
 
-import { LAYOUT_ANALYZE_SYSTEM, LAYOUT_CATEGORIES, LAYOUT_OBSERVE_SYSTEM, LAYOUT_SYNTH_SYSTEM, buildMascotPrompt, buildSectionPrompt, buildSectionRefinePrompt, buildSystemBoardPrompt, compileLayoutSkill, computeLayoutStats, layoutAnalyzePrompt, layoutExemplarsBlock, layoutLearnedBlock, layoutObservePrompt, layoutPlanSystem, layoutPlanUser, layoutSynthUser, sanitizeLayoutAnalysis, sanitizeLayoutForm, sanitizeLayoutPlan, sanitizeLayoutSiteAnalysis, sanitizeSiteObs, type LayoutAnalysis, type LayoutAttach, type LayoutObs, type LayoutPagePlan, type LayoutPlan, type LayoutSectionPlan, type LayoutSiteAnalysis } from "../_shared/layout.ts";
+import { layoutFontsBlock, LAYOUT_ANALYZE_SYSTEM, LAYOUT_CATEGORIES, LAYOUT_OBSERVE_SYSTEM, LAYOUT_SYNTH_SYSTEM, buildMascotPrompt, buildSectionPrompt, buildSectionRefinePrompt, buildSystemBoardPrompt, compileLayoutSkill, computeLayoutStats, layoutAnalyzePrompt, layoutExemplarsBlock, layoutLearnedBlock, layoutObservePrompt, layoutPlanSystem, layoutPlanUser, layoutSynthUser, sanitizeLayoutAnalysis, sanitizeLayoutForm, sanitizeLayoutPlan, sanitizeLayoutSiteAnalysis, sanitizeSiteObs, type LayoutAnalysis, type LayoutAttach, type LayoutObs, type LayoutPagePlan, type LayoutPlan, type LayoutSectionPlan, type LayoutSiteAnalysis } from "../_shared/layout.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -267,6 +268,7 @@ Deno.serve(async (req) => {
     if (action === "logo_branding_image") return json(await logoBrandingImage(ctx, body));
     if (action === "thumb_observe") return json(await thumbObserve(ctx, body));
     if (action === "thumb_train") return json(await thumbTrain(ctx, body));
+    if (action === "font_analyze") return json(await fontAnalyze(ctx, body));
     if (action === "thumb_ideate") return json(await thumbIdeate(ctx, body));
     if (action === "thumb_image") return json(await thumbImage(ctx, body));
     if (action === "layout_observe") return json(await layoutObserve(ctx, body));
@@ -878,13 +880,14 @@ async function logoBrandingImage(ctx: Ctx, body: Record<string, unknown>) {
 
 // ---------- criador de thumbnails ----------
 /** Passo 1 do treino: a IA de visão observa até 8 thumbnails por chamada (posição, expressão, texto, paleta…) e já sugere as categorias */
+const NL2 = String.fromCharCode(10, 10);
 async function thumbObserve(ctx: Ctx, body: Record<string, unknown>) {
   const { key, model } = await textKey(ctx);
   const brandId = String(body.brand_id ?? "");
   const { data: brand } = await ctx.asCaller.from("studio_brands").select("id").eq("id", brandId).single();
   if (!brand) throw new Fail("Pasta não encontrada.", 404);
   const ids = (Array.isArray(body.asset_ids) ? body.asset_ids : []).map(String).slice(0, 8);
-  const { data: assets } = await ctx.admin.from("studio_assets").select("id, storage_path, thumb_path, tags").eq("brand_id", brandId).eq("kind", "thumb_ref").in("id", ids);
+  const { data: assets } = await ctx.admin.from("studio_assets").select("id, storage_path, thumb_path, tags, meta").eq("brand_id", brandId).eq("kind", "thumb_ref").in("id", ids);
   const list = assets ?? [];
   if (!list.length) throw new Fail("Nenhuma thumbnail para observar.", 400);
   const content: unknown[] = [{ type: "text", text: thumbObservePrompt(list.length) }];
@@ -894,12 +897,35 @@ async function thumbObserve(ctx: Ctx, body: Record<string, unknown>) {
   for (const o of obs) {
     const a = list[o.index];
     const own = ((a.tags ?? []) as string[]).filter((t) => THUMB_CATEGORIES.some((c) => c.id === t));
-    await ctx.admin.from("studio_assets").update({ meta: o, tags: own.length ? a.tags : [...((a.tags ?? []) as string[]), ...o.categories] }).eq("id", a.id);
+    const keep = (a.meta as { font_match?: FontMatch } | null)?.font_match;
+    await ctx.admin.from("studio_assets").update({ meta: keep ? { ...o, font_match: keep } : o, tags: own.length ? a.tags : [...((a.tags ?? []) as string[]), ...o.categories] }).eq("id", a.id);
   }
   return { ok: true, observed: obs.length, model };
 }
 
-/** Passo 2 do treino: sintetiza o manual de estilo (geral + por categoria) a partir das observações e grava o documento */
+/** LEITOR DE FONTES: compara o texto de uma imagem do treino com uma folha numerada de fontes candidatas (desenhada no navegador) e grava a mais parecida em meta.font_match */
+async function fontAnalyze(ctx: Ctx, body: Record<string, unknown>) {
+  const { key } = await providerKey(ctx, "openai");
+  const model = (await settings(ctx)).text_model;
+  const id = String(body.asset_id ?? "");
+  const { data: a } = await ctx.asCaller.from("studio_assets").select("id, brand_id, kind, storage_path, thumb_path, meta").eq("id", id).single();
+  if (!a) throw new Fail("Imagem não encontrada ou sem permissão.", 404);
+  const sheet = String(body.sheet ?? "");
+  if (!/^data:image\/(png|jpeg|webp);base64,/.test(sheet) || sheet.length > 4_000_000) throw new Fail("Folha de fontes inválida.", 400);
+  const cands: Cand[] = (Array.isArray(body.cands) ? body.cands : []).slice(0, 40).map((c: Record<string, unknown>) => ({ n: Number(c.n), family: String(c.family ?? "").slice(0, 60), weight: Number(c.weight) || 400 })).filter((c) => c.n > 0 && c.family);
+  if (!cands.length) throw new Fail("Sem fontes candidatas.", 400);
+  const text = String(body.text ?? "").slice(0, 60);
+  const main = await download(ctx, a.thumb_path ?? a.storage_path);
+  const content = [{ type: "text", text: fontAnalyzePrompt({ text, cands, hint: String(body.hint ?? "").slice(0, 80) }) }, imgPart(main, "high"), { type: "image_url", image_url: { url: sheet, detail: "high" } }];
+  let parsed: unknown; try { parsed = JSON.parse(await chat(key, model, FONT_ANALYZE_SYSTEM, content, true)); } catch { throw new Fail("A IA devolveu a leitura de fonte fora do formato.", 502); }
+  const fm = sanitizeFontMatch(parsed, cands, text);
+  const meta = ((a.meta ?? {}) as Record<string, unknown>);
+  const prev = (meta.font_match as FontMatch | undefined)?.confidence ?? -1;
+  if (body.save !== false && (!body.only_better || (fm?.confidence ?? 0) > prev)) await ctx.admin.from("studio_assets").update({ meta: { ...meta, font_match: fm ?? { family: "", weight: 400, cls: "sans", case: "mixed", width: "", contrast: "", serif: "", confidence: 0, alts: [], text, note: "sem texto", uncertain: true, none: true } } }).eq("id", id);
+  return { ok: true, match: fm, model };
+}
+
+/** Passo 2 do treino: sintetiza o manual de estilo (geral + por categoria) a partir das observações e grava o documento; inclui o perfil de fontes lidas por categoria */
 async function thumbTrain(ctx: Ctx, body: Record<string, unknown>) {
   const brandId = String(body.brand_id ?? "");
   const { data: brand } = await ctx.asCaller.from("studio_brands").select("id, name, is_base, thumb_skill_version, thumb_analysis, thumb_notes").eq("id", brandId).single();
@@ -910,14 +936,15 @@ async function thumbTrain(ctx: Ctx, body: Record<string, unknown>) {
   let analysis: ThumbAnalysis | null = null;
   const observed = (assets ?? []).filter((a) => a.meta);
   const stats = observed.length ? computeThumbStats(observed.map((a) => ({ o: a.meta as ThumbObs, tags: ((a.tags ?? []) as string[]).filter((t) => THUMB_CATEGORIES.some((c) => c.id === t)) }))) : undefined;
-  if (body.analyze === false && stats) analysis = { stats };
+  const fonts = observed.length ? computeFontProfile(observed.map((a) => { const m = a.meta as ThumbObs & { font_match?: FontMatch }; return { tags: ((a.tags ?? []) as string[]).filter((t) => THUMB_CATEGORIES.some((c) => c.id === t)), hasText: !!m.has_text, fm: m.font_match ?? null }; })) : undefined;
+  if (body.analyze === false && stats) analysis = { ...((brand.thumb_analysis as ThumbAnalysis | null) ?? {}), stats, fonts };
   if (body.analyze !== false && observed.length) {
     const { key, model } = await textKey(ctx);
     const obs = observed.map((a, i) => ({ index: i, o: a.meta as ThumbObs, tags: ((a.tags ?? []) as string[]) }));
     const groups: Record<string, number[]> = {};
     for (const x of obs) { const cs = x.tags.filter((t) => THUMB_CATEGORIES.some((c) => c.id === t)); for (const c of (cs.length ? cs : x.o.categories)) (groups[c] ??= []).push(x.index); }
     let parsed: unknown; try { parsed = JSON.parse(await chat(key, model, THUMB_SYNTH_SYSTEM, thumbSynthUser(obs.map((x) => ({ index: x.index, o: x.o })), groups), true)); } catch { throw new Fail("A IA devolveu um manual fora do formato. Tente de novo.", 502); }
-    analysis = sanitizeThumbAnalysis(parsed, Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, v.length])), stats);
+    analysis = sanitizeThumbAnalysis(parsed, Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, v.length])), stats, fonts);
   }
   const version = (brand.thumb_skill_version ?? 0) + 1;
   const doc = compileThumbSkill({ name: brand.name, isBase: brand.is_base, analysis: analysis ?? brand.thumb_analysis, refs: total, version, extra: brand.thumb_notes });
@@ -945,7 +972,9 @@ async function thumbIdeate(ctx: Ctx, body: Record<string, unknown>) {
   const imgs: unknown[] = [];
   for (const i of inputs) { try { imgs.push(imgPart(await download(ctx, i.path))); } catch { /* arquivo sumiu */ } }
   const refine = body.feedback ? { previous: body.previous ?? {}, feedback: String(body.feedback) } : null;
-  const sys = thumbIdeateSystem({ baseDoc: base?.thumb_skill_doc ?? null, brandDoc: brand.is_base ? null : brand.thumb_skill_doc, extra: noteOf(s, "thumb_rules"), count, categories: form.categories });
+  const fonts: Record<string, FontProfile> = { ...((base?.thumb_analysis as ThumbAnalysis | null)?.fonts ?? {}) };
+  for (const [k, v] of Object.entries((brand.thumb_analysis as ThumbAnalysis | null)?.fonts ?? {})) if (hasLearned({ [k]: v }, k) || !fonts[k]) fonts[k] = v;
+  const sys = thumbIdeateSystem({ baseDoc: base?.thumb_skill_doc ?? null, brandDoc: brand.is_base ? null : brand.thumb_skill_doc, extra: noteOf(s, "thumb_rules"), count, categories: form.categories, fonts });
   const isCat = (t: string) => THUMB_CATEGORIES.some((c) => c.id === t);
   const { data: pool } = await ctx.admin.from("studio_assets").select("id, tags, meta, favorite, storage_path, thumb_path").in("brand_id", [brand.id, base?.id ?? brand.id]).eq("kind", "thumb_ref").not("meta", "is", null).limit(500);
   const items = (pool ?? []).map((a) => ({ id: a.id as string, tags: ((a.tags ?? []) as string[]).filter(isCat), favorite: !!a.favorite, obs: a.meta as ThumbObs, storage_path: a.storage_path as string, thumb_path: a.thumb_path as string | null }));
@@ -968,7 +997,7 @@ async function thumbIdeate(ctx: Ctx, body: Record<string, unknown>) {
   const content = [{ type: "text", text: userText }, ...imgs, ...candParts];
   const out = await chat(key, model, sys, content, true);
   let parsed: unknown; try { parsed = JSON.parse(out); } catch { throw new Fail("A IA devolveu uma resposta fora do formato. Tente de novo.", 502); }
-  const r = sanitizeThumbConcepts(parsed, count, form, cands.length);
+  const r = sanitizeThumbConcepts(parsed, count, form, cands.length, fonts);
   if (!r.concepts.length) throw new Fail("A IA não devolveu conceitos. Tente de novo com mais detalhes.", 502);
   // converte "REF n" em ids reais; sem escolha, usa as 3 primeiras candidatas diferentes entre conceitos
   const concepts = r.concepts.map((c, i) => {
@@ -1161,7 +1190,7 @@ async function layoutPlanAction(ctx: Ctx, body: Record<string, unknown>) {
   const isCat = (t: string) => LAYOUT_CATEGORIES.some((c) => c.id === t);
   const exemplars = layoutExemplarsBlock((pool ?? []).map((x) => ({ obs: x.observation as LayoutObs, name: x.name as string, tags: ((x.categories ?? []) as string[]).filter(isCat) })), form.categories);
   const refine = body.feedback ? { previous: body.previous ?? project.plan ?? {}, feedback: String(body.feedback) } : null;
-  const sys = layoutPlanSystem({ baseDoc: base?.layout_skill_doc ?? null, brandDoc: brand.is_base ? null : brand.layout_skill_doc, extra: noteOf(s, "layout_rules"), categories: form.categories, exemplars });
+  const sys = layoutPlanSystem({ baseDoc: base?.layout_skill_doc ?? null, brandDoc: brand.is_base ? null : brand.layout_skill_doc, extra: noteOf(s, "layout_rules"), categories: form.categories, exemplars: [exemplars, layoutFontsBlock((pool ?? []).map((x) => ({ obs: x.observation as LayoutObs, tags: ((x.categories ?? []) as string[]).filter(isCat) })), form.categories, (id) => LAYOUT_CATEGORIES.find((c) => c.id === id)?.label ?? id)].filter(Boolean).join(NL2) });
   const userText = layoutPlanUser({ form, analysis: project.analysis as LayoutSiteAnalysis | null, sites, inputs: inputs.map((i) => ({ role: i.role, note: i.note })), refine });
   const out = await chat(key, model, sys, imgs.length ? [{ type: "text", text: userText }, ...imgs] : userText, true);
   let parsed: unknown; try { parsed = JSON.parse(out); } catch { throw new Fail("A IA devolveu um plano fora do formato. Tente de novo.", 502); }

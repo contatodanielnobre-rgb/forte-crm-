@@ -446,3 +446,17 @@ ${o.feedback}
 ${LAYOUT_RULES}
 ${layoutAttachmentsBlock(o.attach) ? `\n${layoutAttachmentsBlock(o.attach)}` : ""}`.trim();
 }
+
+/** Fontes dos sites do treino (a leitura de cada site já devolve a fonte do Google mais parecida): vão para o plano em vez de a IA inventar */
+export function layoutFontsBlock(list: { obs: LayoutObs; tags: string[]; name?: string }[], categories: string[], label: (id: string) => string = (x) => x): string {
+  const clean = (f: string) => f.split(/[,;(—–]/)[0].replace(/\b(thin|extra ?light|light|regular|medium|semi ?bold|extra ?bold|bold|black|italic)\b/gi, "").replace(/\s+/g, " ").trim();
+  const count = (vals: string[]) => { const m = new Map<string, number>(); vals.map(clean).filter((v) => v.length > 2 && v.length < 32).forEach((v) => m.set(v, (m.get(v) ?? 0) + 1)); return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5); };
+  const groups = categories.length ? categories : ["_todos"];
+  const rows = groups.map((c) => {
+    const sub = list.filter((x) => c === "_todos" || x.tags.includes(c)); if (sub.length < 3) return "";
+    const h = count(sub.map((x) => x.obs.typography?.heading ?? "")), b = count(sub.map((x) => x.obs.typography?.body ?? ""));
+    if (!h.length) return "";
+    return `- ${c === "_todos" ? "todos os sites" : label(c)} (${sub.length} sites): títulos em ${h.map(([f, n]) => `${f} (${n})`).join(", ")}; texto em ${b.map(([f, n]) => `${f} (${n})`).join(", ") || "—"}`;
+  }).filter(Boolean);
+  return rows.length ? `# FONTES DOS SITES DO TREINO (leitor de fontes: a mais parecida de cada site)\nNo design system, escolha os títulos e o texto ENTRE estas fontes (a categoria do negócio manda), salvo se o usuário definiu a fonte. Não invente outra.\n${rows.join("\n")}` : "";
+}

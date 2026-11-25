@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState, type DragEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { BookOpen, BrainCircuit, Check, CheckSquare, ChevronDown, Copy, Image as ImageIcon, Save, Star, Tags, Trash2, UploadCloud, X } from 'lucide-react'
+import { BookOpen, BrainCircuit, Check, CheckSquare, ChevronDown, Copy, Image as ImageIcon, Save, Star, Tags, Trash2, Type, UploadCloud, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { cn, errMsg, fmtBytes } from '@/lib/utils'
@@ -10,7 +10,10 @@ import { deleteAssets, saveSettings, uploadAssets, useAssets, useStudioSettings,
 import { StudioImg } from '@/features/studio/ui'
 import type { Brand, StudioAsset } from '@/features/studio/types'
 import { THUMB_CATEGORIES, THUMB_REF_FONTS, THUMB_SKILL, THUMB_TYPE_GUIDE } from '../../../supabase/functions/_shared/thumb-skill'
-import { runThumbTraining, saveThumbNotes, tagThumbRefs } from './data'
+import { readFontOf } from '@/features/fonts/reader'
+import { FontSample } from '@/features/fonts/FontSample'
+import { FONT_CLASSES, fontLabel, type FontMatch, type FontProfile } from '../../../supabase/functions/_shared/fonts'
+import { rereadThumbFonts, runThumbTraining, saveThumbNotes, tagThumbRefs } from './data'
 import type { ThumbObs } from './types'
 
 const MAX = 300
@@ -31,6 +34,58 @@ function Obs({ o }: { o: ThumbObs }) {
   )
 }
 
+const CASE_PT: Record<string, string> = { upper: 'caixa alta', lower: 'minúsculas', mixed: 'caixa mista' }
+
+/** Fonte lida de uma thumbnail: a mais parecida + alternativas */
+function FontRead({ m, onReread, busy }: { m?: FontMatch; onReread: () => void; busy: boolean }) {
+  return (
+    <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 p-3" data-testid="font-read">
+      <div className="flex items-center justify-between gap-2"><p className="label !mb-0">Fonte lida pelo leitor de fontes</p><button type="button" className="btn-ghost btn-sm" onClick={onReread} disabled={busy} data-testid="font-read-btn">{busy ? <Spinner className="h-3.5 w-3.5" /> : <Type className="h-3.5 w-3.5" />}{m ? 'Reler' : 'Ler agora'}</button></div>
+      {m?.family ? (
+        <>
+          <div className="mt-1 flex items-baseline gap-3"><FontSample family={m.family} weight={m.weight} text={m.text || 'Aa Rag'} className="text-2xl text-ink" /></div>
+          <p className="mt-1 text-xs text-zinc-700"><b>{fontLabel(m)}</b> · {FONT_CLASSES[m.cls] ?? m.cls} · {CASE_PT[m.case] ?? m.case} · {Math.round(m.confidence * 100)}% de semelhança{m.uncertain ? ' (incerta)' : ''}</p>
+          {m.alts.length > 0 && <p className="mt-0.5 text-[11px] text-zinc-500">Também parece com: {m.alts.map((a) => fontLabel(a)).join(', ')}</p>}
+          {m.note && <p className="mt-0.5 text-[11px] text-zinc-500">{m.note}</p>}
+        </>
+      ) : <p className="mt-1 text-xs text-zinc-500">{m ? `Nenhuma fonte candidata parecida.${m.note ? ' ' + m.note : ''}` : 'Ainda não lida. O treino lê a fonte de cada thumbnail com texto.'}</p>}
+    </div>
+  )
+}
+
+/** Perfil de fontes aprendido, por categoria (o que o estúdio usa em vez de inventar fonte) */
+function LearnedFonts({ fonts, onReread, busy, total }: { fonts?: Record<string, FontProfile>; onReread: () => void; busy: boolean; total: number }) {
+  const rows = Object.entries(fonts ?? {}).filter(([, v]) => v.fonts.length)
+  return (
+    <section className="card p-5 sm:p-6" data-testid="thumb-learned-fonts">
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-display text-[15px] font-semibold tracking-tight">Fontes aprendidas das suas thumbnails</h3>
+        <button type="button" className="btn-outline btn-sm" onClick={onReread} disabled={busy || !total} data-testid="fonts-reread">{busy ? <Spinner className="h-3.5 w-3.5" /> : <Type className="h-3.5 w-3.5" />}Reler todas as fontes</button>
+      </div>
+      <p className="mb-3 text-xs text-zinc-500">O leitor de fontes compara as letras de cada thumbnail com centenas de fontes do Google Fonts e anota a mais parecida (não precisa ser a exata). Por categoria, as fontes mais usadas viram a tipografia do estúdio: ao gerar, a IA usa só estas, em vez de inventar.</p>
+      {!rows.length ? <p className="rounded-xl bg-zinc-50 px-3 py-4 text-center text-xs text-zinc-500">Ainda sem leitura. Clique em Treinar (ou em Reler todas as fontes) para o leitor identificar a fonte de cada thumbnail com texto.</p> : (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {rows.map(([id, v]) => (
+            <div key={id} className="rounded-2xl border border-zinc-200 p-3.5" data-testid="learned-font-card">
+              <div className="mb-2 flex items-center justify-between gap-2"><b className="text-sm">{id === '_todas' ? 'Todas as thumbnails' : THUMB_CATEGORIES.find((c) => c.id === id)?.label ?? id}</b><span className="text-[10px] font-semibold text-zinc-500">{v.text_n} com texto de {v.n} ({v.text_pct}%)</span></div>
+              <ul className="space-y-1.5">
+                {v.fonts.slice(0, 5).map((f) => (
+                  <li key={f.family + f.weight} className="flex items-center gap-3">
+                    <FontSample family={f.family} weight={f.weight} className="w-28 shrink-0 truncate text-xl leading-none text-ink" />
+                    <div className="min-w-0 flex-1"><p className="truncate text-xs"><b>{fontLabel(f)}</b> <span className="text-zinc-500">· {FONT_CLASSES[f.cls] ?? f.cls} · {CASE_PT[f.case] ?? f.case}</span></p><div className="mt-0.5 h-1.5 overflow-hidden rounded-full bg-zinc-100"><div className="h-full rounded-full bg-brand" style={{ width: `${Math.max(4, f.pct)}%` }} /></div></div>
+                    <span className="w-9 shrink-0 text-right text-xs font-semibold text-zinc-600">{f.pct}%</span>
+                  </li>
+                ))}
+              </ul>
+              {v.classes.length > 0 && <p className="mt-2 text-[11px] text-zinc-500">Estilos: {v.classes.map(([k, p]) => `${FONT_CLASSES[k] ?? k} ${p}%`).join(' · ')}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
 /** Thumbnails de referência de uma pasta: envio em lote, categorias (várias por thumbnail), estrela e a observação da IA de cada uma */
 function ThumbRefs({ brand }: { brand: Brand }) {
   const { profile } = useAuth()
@@ -42,6 +97,7 @@ function ThumbRefs({ brand }: { brand: Brand }) {
   const [view, setView] = useState<StudioAsset | null>(null)
   const [confirm, setConfirm] = useState(false)
   const [filter, setFilter] = useState<string | null>(null)
+  const [fontBusy, setFontBusy] = useState(false)
   const input = useRef<HTMLInputElement>(null)
   const busy = uploads.some((u) => u.status === 'queued' || u.status === 'uploading')
   const refresh = () => { qc.invalidateQueries({ queryKey: ['studio', 'assets'] }); qc.invalidateQueries({ queryKey: ['studio', 'usage'] }) }
@@ -140,6 +196,10 @@ function ThumbRefs({ brand }: { brand: Brand }) {
               <div className="mb-3 flex flex-wrap gap-1">{THUMB_CATEGORIES.map((c) => { const on = (view.tags ?? []).includes(c.id); return <button key={c.id} type="button" onClick={async () => { await tagThumbRefs([view], c.id, on ? 'remove' : 'add'); setView({ ...view, tags: on ? (view.tags ?? []).filter((t) => t !== c.id) : [...(view.tags ?? []), c.id] }); refresh() }} className={cn('rounded-full border px-2.5 py-1 text-[11px] font-medium transition', on ? 'border-ink bg-ink text-white' : 'border-zinc-200 hover:border-zinc-400')}>{catLabel(c.id)}</button> })}</div>
               <p className="label">Análise da IA</p>
               {view.meta ? <Obs o={view.meta} /> : <p className="text-xs text-zinc-500">Ainda não lida. Clique em Treinar para a IA analisar.</p>}
+              {view.meta?.has_text && <FontRead m={view.meta.font_match} busy={fontBusy} onReread={async () => {
+                const o = view.meta!; setFontBusy(true)
+                try { const lt = o.lettering as { font_hint?: string; font_alts?: string[]; weight?: string; case?: string } | undefined; const m = await readFontOf({ id: view.id, text: o.text ?? [], hint: lt?.font_hint, alts: lt?.font_alts, weight: lt?.weight, case: lt?.case }); if (m) setView({ ...view, meta: { ...o, font_match: m } }); refresh(); toast.success(m?.family ? `Fonte mais parecida: ${fontLabel(m)}` : 'Nenhuma fonte parecida encontrada') } catch (e) { toast.error(errMsg(e)) } finally { setFontBusy(false) }
+              }} />}
             </div>
           </div>
         </Modal>
@@ -174,7 +234,7 @@ export default function Training({ brand, base, onTrained }: { brand: Brand; bas
   const { data: refs } = useAssets(brand.id, 'thumb_ref')
   const { data: settings } = useStudioSettings()
   const [step, setStep] = useState<{ text: string; pct: number } | null>(null)
-  const [result, setResult] = useState<{ version: number; refs: number; observed: number; demo: boolean } | null>(null)
+  const [result, setResult] = useState<{ version: number; refs: number; observed: number; demo: boolean; fonts: number } | null>(null)
   const [notes, setNotes] = useState(brand.thumb_notes ?? '')
   const agent = (settings?.agent_notes ?? {}) as { thumb_rules?: string }
   const [rules, setRules] = useState(agent.thumb_rules ?? '')
@@ -189,10 +249,14 @@ export default function Training({ brand, base, onTrained }: { brand: Brand; bas
     setStep({ text: 'Começando…', pct: 2 })
     try {
       const r = await runThumbTraining(brand.id, refs ?? [], (text, pct) => setStep({ text, pct }), reread)
-      setResult({ version: r.version, refs: r.refs, observed: r.observed, demo: r.demo })
+      setResult({ version: r.version, refs: r.refs, observed: r.observed, demo: r.demo, fonts: r.fonts.read })
       qc.invalidateQueries({ queryKey: ['studio'] })
       toast.success(`Treino v${r.version} concluído`)
     } catch (e) { toast.error(errMsg(e)) } finally { setStep(null) }
+  }
+  const rereadFonts = async () => {
+    setStep({ text: 'Começando a leitura de fontes…', pct: 2 })
+    try { const r = await rereadThumbFonts(brand.id, (text, pct) => setStep({ text, pct })); qc.invalidateQueries({ queryKey: ['studio'] }); toast.success(`${r.read} fonte(s) lida(s)${r.failed ? `, ${r.failed} falharam` : ''}`) } catch (e) { toast.error(errMsg(e)) } finally { setStep(null) }
   }
   const saveNotes = async () => { try { await saveThumbNotes(brand.id, notes); qc.invalidateQueries({ queryKey: ['studio', 'brands'] }); toast.success('Regras do canal salvas. Treine de novo para aplicar.') } catch (e) { toast.error(errMsg(e)) } }
   const saveRules = async () => { try { await saveSettings({ agent_notes: { ...(settings?.agent_notes ?? {}), thumb_rules: rules.trim() } }, qc); toast.success('Regras da agência salvas (valem já na próxima criação).') } catch (e) { toast.error(errMsg(e)) } }
@@ -224,7 +288,7 @@ export default function Training({ brand, base, onTrained }: { brand: Brand; bas
         {result?.demo && <p className="mx-auto mt-3 max-w-md rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-900"><b>Análise simulada.</b> Sem chave real da OpenAI, a IA de visão não leu as suas thumbnails. Conecte a chave em Modelos e APIs e treine de novo.</p>}
         {result && !result.demo && (
           <div className="mx-auto mt-5 max-w-lg rounded-2xl bg-emerald-50 p-4 text-left text-sm text-emerald-900" data-testid="thumb-train-done">
-            <p className="font-semibold"><Check className="mr-1 inline h-4 w-4" />Treino v{result.version} concluído: {result.observed} thumbnail(s) analisada(s) de {result.refs}.</p>
+            <p className="font-semibold"><Check className="mr-1 inline h-4 w-4" />Treino v{result.version} concluído: {result.observed} thumbnail(s) analisada(s) de {result.refs}{result.fonts ? `; ${result.fonts} fonte(s) lida(s) agora` : ''}.</p>
             <button className="btn-brand mt-3 h-10" onClick={onTrained}>Abrir o estúdio de thumbnails →</button>
           </div>
         )}
@@ -244,9 +308,11 @@ export default function Training({ brand, base, onTrained }: { brand: Brand; bas
         </div>
       </section>
 
+      <LearnedFonts fonts={a?.fonts} onReread={rereadFonts} busy={!!step} total={total} />
+
       <section className="card p-5 sm:p-6" data-testid="thumb-fonts">
-        <h3 className="mb-1 font-display text-[15px] font-semibold tracking-tight">Fontes e uso do texto por nicho</h3>
-        <p className="mb-3 text-xs text-zinc-500">Identifiquei visualmente a fonte de cada thumbnail com texto (a mais parecida, quando não dá para saber a exata) e transformei em recomendação por categoria. A IA usa isto sozinha quando você não escolhe a fonte: cada nicho tem sua tipografia, sua profundidade (atrás/na frente), caixa, cores, destaque e seta. Nichos marcados "sem texto" não levam texto em Automático.</p>
+        <h3 className="mb-1 font-display text-[15px] font-semibold tracking-tight">Guia embutido de fontes e uso do texto por nicho</h3>
+        <p className="mb-3 text-xs text-zinc-500">Guia de partida (das primeiras thumbnails). Quando uma categoria já tem fontes lidas das suas imagens (bloco acima), valem as lidas; este guia segue valendo para profundidade, posição, caixa, cores, destaque e seta, e para categorias ainda sem leitura: cada nicho tem sua tipografia, sua profundidade (atrás/na frente), caixa, cores, destaque e seta. Nichos marcados "sem texto" não levam texto em Automático.</p>
         <div className="grid gap-3 lg:grid-cols-2">
           {THUMB_CATEGORIES.filter((c) => THUMB_TYPE_GUIDE[c.id]).map((c) => { const g = THUMB_TYPE_GUIDE[c.id]; return (
             <div key={c.id} className="rounded-2xl border border-zinc-200 p-3.5" data-testid="font-card">

@@ -12,6 +12,7 @@ import BrandAssistant from './BrandAssistant'
 import FontPicker from './FontPicker'
 import { deleteAssets, hasProvider, saveBrand, trainBrand, updateAsset, uploadAssets, useAssets, useProviderStatus, useStudioSettings, useUsage } from './data'
 import DocImport from './DocImport'
+import BrandFontReader from '@/features/fonts/BrandFontReader'
 import { compileSkill, completeness } from './skill'
 import { ChipSelect, RuleList, SectionCard, StudioImg, TagInput } from './ui'
 import type { BrandImportResult } from './data'
@@ -171,6 +172,7 @@ export default function BrandForm({ brand, onTrained }: { brand: Brand; onTraine
         </SectionCard>
 
         <SectionCard icon={<Type className="h-4 w-4" />} title="Tipografia" hint="Fontes padrão desta empresa: digite o nome, escolha na lista e ela fica salva. O Criador de prompts usa estas fontes (e você pode desligá-las por post).">
+          <BrandFontReader refs={refs ?? []} onUse={(s) => { set('fonts', { ...d.fonts, ...(s.title ? { title: s.title } : {}), ...(s.body ? { body: s.body } : {}), ...(s.accent ? { accent: s.accent } : {}) }); set('font_prefs', { ...d.font_prefs, list: [...new Set([...d.font_prefs.list, ...s.list])].slice(0, 14) }) }} />
           <p className="label">Fontes da empresa</p>
           <FontPicker value={d.font_prefs.list} onChange={(v) => set('font_prefs', { ...d.font_prefs, list: v })} />
           <Field label="Como usar (opcional)" className="mt-3"><Textarea rows={2} value={d.font_prefs.notes} onChange={(e) => set('font_prefs', { ...d.font_prefs, notes: e.target.value })} placeholder="Ex.: Títulos em Anton, caixa alta; palavra de destaque em Playfair Display itálico; texto corrido em Inter." /></Field>

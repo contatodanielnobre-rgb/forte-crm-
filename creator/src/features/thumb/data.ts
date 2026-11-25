@@ -6,7 +6,8 @@ import { BUCKET_STUDIO } from '@/features/studio/catalog'
 import { studioGenerate } from '@/features/studio/data'
 import type { Brand, StudioAsset } from '@/features/studio/types'
 import { renderSpecimen } from './specimen'
-import type { InputRole, ThumbAnalysis, ThumbConcept, ThumbForm, ThumbInput, ThumbProject, ThumbVersion } from './types'
+import { readFontOf } from '@/features/fonts/reader'
+import type { InputRole, ThumbAnalysis, ThumbConcept, ThumbForm, ThumbInput, ThumbObs, ThumbProject, ThumbVersion } from './types'
 
 const busy = (s?: string) => s === 'queued' || s === 'running'
 
@@ -40,19 +41,46 @@ export const observeThumbs = (brandId: string, assetIds: string[]) => studioGene
 export const trainThumbs = (brandId: string, analyze = true) =>
   studioGenerate<{ analysis: ThumbAnalysis | null; version: number; refs: number; observed: number; doc: string; demo?: boolean }>({ action: 'thumb_train', brand_id: brandId, analyze })
 
-/** Treino completo: a IA de visão lê cada thumbnail ainda não lida (8 por chamada) e depois escreve o manual de estilo */
+/** Leitor de fontes: para cada thumbnail com texto, compara as letras com dezenas de fontes e grava a mais parecida (meta.font_match). Retorna quantas foram lidas. */
+export async function readThumbFonts(brandId: string, onStep: (s: string, pct: number) => void, force = false, from = 0, to = 100) {
+  const { data } = await supabase.from('studio_assets').select('id, meta').eq('brand_id', brandId).eq('kind', 'thumb_ref')
+  const todo = ((data ?? []) as { id: string; meta: ThumbObs | null }[]).filter((a) => a.meta?.has_text && (force || !a.meta.font_match))
+  let done = 0, failed = 0, next = 0
+  const worker = async () => {
+    while (next < todo.length) {
+      const a = todo[next++], o = a.meta!
+      try { await readFontOf({ id: a.id, text: o.text ?? [], hint: o.lettering?.font_hint, alts: (o.lettering as { font_alts?: string[] } | undefined)?.font_alts, weight: (o.lettering as { weight?: string } | undefined)?.weight, case: (o.lettering as { case?: string } | undefined)?.case }) } catch { failed++ }
+      done++; onStep(`Lendo a fonte de cada thumbnail com texto (${done}/${todo.length})…`, Math.round(from + (done / Math.max(1, todo.length)) * (to - from)))
+    }
+  }
+  await Promise.all([worker(), worker(), worker()])
+  return { read: todo.length - failed, failed, total: todo.length }
+}
+
+/** Treino completo: a IA de visão lê cada thumbnail ainda não lida (8 por chamada), o leitor identifica a fonte de cada uma e depois a IA escreve o manual de estilo */
 export async function runThumbTraining(brandId: string, refs: StudioAsset[], onStep: (s: string, pct: number) => void, reread = false) {
   const todo = refs.filter((a) => reread || !(a as StudioAsset & { meta?: unknown }).meta)
   let demo = false
   for (let i = 0; i < todo.length; i += 8) {
-    onStep(`Lendo as thumbnails com IA de visão (${Math.min(todo.length, i + 8)}/${todo.length})…`, Math.round((i / Math.max(1, todo.length)) * 80))
+    onStep(`Lendo as thumbnails com IA de visão (${Math.min(todo.length, i + 8)}/${todo.length})…`, Math.round((i / Math.max(1, todo.length)) * 50))
     const r = await observeThumbs(brandId, todo.slice(i, i + 8).map((a) => a.id))
     demo = demo || !!r.demo
   }
-  onStep('Escrevendo o manual de estilo (geral e por categoria)…', 90)
+  let fonts = { read: 0, failed: 0, total: 0 }
+  if (!demo) { try { fonts = await readThumbFonts(brandId, onStep, false, 50, 90) } catch { /* sem a leitura de fontes o treino continua com o guia embutido */ } }
+  onStep('Escrevendo o manual de estilo (geral e por categoria)…', 92)
   const t = await trainThumbs(brandId, true)
   onStep('Pronto', 100)
-  return { ...t, demo: demo || !!t.demo }
+  return { ...t, demo: demo || !!t.demo, fonts }
+}
+
+/** Só relê as fontes (todas, de novo) e atualiza as estatísticas sem refazer o manual escrito */
+export async function rereadThumbFonts(brandId: string, onStep: (s: string, pct: number) => void) {
+  const fonts = await readThumbFonts(brandId, onStep, true, 2, 94)
+  onStep('Atualizando o perfil de fontes por categoria…', 96)
+  await trainThumbs(brandId, false)
+  onStep('Pronto', 100)
+  return fonts
 }
 
 export async function saveThumbNotes(brandId: string, notes: string) {

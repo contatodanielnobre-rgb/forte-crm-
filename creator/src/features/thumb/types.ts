@@ -39,10 +39,12 @@ export interface ThumbObs {
   lettering?: { style_id: string; font_hint: string; look: string; container: string; integration: string; hierarchy: string }
   object_logic?: string; realism?: string; skeleton?: string
   expression_class?: string; face_height_pct?: number; text_height_pct?: number; text_behind?: boolean
+  font_match?: import('../../../supabase/functions/_shared/fonts').FontMatch
 }
 export interface ThumbCatAnalysis { count?: number; summary?: string; composition?: string; character?: string; expression?: string; scene?: string; palette?: string; text?: string; typography?: string; layout?: string; props?: string; object_logic?: string; realism?: string; do?: string[]; dont?: string[] }
 export interface ThumbAnalysis {
   stats?: Record<string, { n: number; text_pct: number; no_person_pct: number; behind_pct: number }>
+  fonts?: Record<string, import('../../../supabase/functions/_shared/fonts').FontProfile>
   general?: { summary?: string; composition?: string; faces?: string; color?: string; text_policy?: string; backgrounds?: string; effects?: string; do?: string[]; dont?: string[] }
   categories?: Record<string, ThumbCatAnalysis>
 }
