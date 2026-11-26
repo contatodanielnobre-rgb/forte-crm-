@@ -26,12 +26,22 @@ export function customSize(aspect: string): string {
   const q = (n: number) => Math.min(3840, Math.max(256, Math.round(n / 16) * 16));
   return `${q(w)}x${q(h)}`;
 }
+/** 4K Ultra: o maior tamanho na proporção pedida (até 3840 no lado maior e ~8,3 milhões de pixels, múltiplos de 16). */
+export function ultraSize(aspect: string): string {
+  const [w, h] = parseAspect(aspect);
+  const r = Math.min(3, Math.max(1 / 3, w / h));
+  let W = Math.sqrt(8_294_400 * r), H = W / r;
+  const k = Math.min(1, 3840 / Math.max(W, H));
+  W *= k; H *= k;
+  const q = (n: number) => Math.max(256, Math.floor(n / 16 + 1e-6) * 16);
+  return `${q(W)}x${q(H)}`;
+}
 const isFlexible = (model: string) => /^gpt-image-2/.test(model);
 
 const blob = (r: ImgRef) => new Blob([r.bytes], { type: r.mime });
 async function send(i: OpenAIImageInput, size: string): Promise<Response> {
   const base = (i.base ?? "https://api.openai.com/v1").replace(/\/$/, "");
-  const quality = ["low", "medium", "high"].includes(i.quality) ? i.quality : "high";
+  const quality = ["low", "medium", "high"].includes(i.quality) ? i.quality : "high"; // "4k" = alta qualidade no tamanho máximo
   const headers = { Authorization: `Bearer ${i.key}` };
   const inputs = i.edit ? [i.edit.image] : i.refs;
   if (inputs.length) {
@@ -47,12 +57,20 @@ async function send(i: OpenAIImageInput, size: string): Promise<Response> {
   });
 }
 
+function fromB64(s: string) {
+  const bin = atob(s); const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 /** Gera (ou edita) uma imagem. Devolve o PNG e o "usage" (tokens) para calcular o custo real. */
 export async function openaiImage(i: OpenAIImageInput): Promise<{ bytes: Uint8Array; usage: OpenAIUsage | null; size: string }> {
-  let size = isFlexible(i.model) ? customSize(i.aspect) : legacySize(i.aspect);
+  const ultra = i.quality === "4k";
+  if (ultra && !isFlexible(i.model)) throw new Error("Este modelo não gera em 4K.");
+  let size = ultra ? ultraSize(i.aspect) : isFlexible(i.model) ? customSize(i.aspect) : legacySize(i.aspect);
   let res = await send(i, size);
-  // se a API recusar o tamanho livre, tenta de novo com os tamanhos clássicos
-  if (!res.ok && res.status === 400 && size !== legacySize(i.aspect)) {
+  // se a API recusar o tamanho livre, tenta de novo com os tamanhos clássicos (no 4K não: quem pediu 4K não recebe menor)
+  if (!ultra && !res.ok && res.status === 400 && size !== legacySize(i.aspect)) {
     const txt = await res.text();
     if (/size/i.test(txt)) { size = legacySize(i.aspect); res = await send(i, size); }
     else throw new Error(`OpenAI imagem: 400 ${txt.slice(0, 500)}`);
@@ -61,7 +79,7 @@ export async function openaiImage(i: OpenAIImageInput): Promise<{ bytes: Uint8Ar
   const data = await res.json();
   const item = data?.data?.[0];
   const usage = (data?.usage ?? null) as OpenAIUsage | null;
-  if (item?.b64_json) return { bytes: Uint8Array.from(atob(item.b64_json), (c) => c.charCodeAt(0)), usage, size };
+  if (item?.b64_json) return { bytes: fromB64(item.b64_json), usage, size };
   if (item?.url) { const r = await fetch(item.url); if (!r.ok) throw new Error("Download da imagem falhou"); return { bytes: new Uint8Array(await r.arrayBuffer()), usage, size }; }
   throw new Error("A API não devolveu imagem.");
 }
