@@ -8,19 +8,38 @@ function allowed(u: URL): boolean {
   const h = u.hostname.toLowerCase();
   if (!/^https?:$/.test(u.protocol)) return false;
   if (!h.includes(".") || h === "localhost" || h.endsWith(".local") || h.endsWith(".internal")) return false;
-  if (/^(127\.|10\.|0\.|169\.254\.|192\.168\.)/.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || h.startsWith("[")) return false;
+  if (privateIp(h) || h.startsWith("[") || (u.port && !["80", "443"].includes(u.port))) return false;
+  return true;
+}
+const privateIp = (ip: string) => /^(127\.|10\.|0\.|169\.254\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip) || /^172\.(1[6-9]|2\d|3[01])\./.test(ip) || /^(::1$|::$|f[cd]|fe80|::ffff:)/i.test(ip);
+/** um domínio público que aponta para um endereço interno também é recusado */
+async function publicHost(host: string) {
+  // deno-lint-ignore no-explicit-any
+  const resolve = (globalThis as any).Deno?.resolveDns;
+  if (!resolve) return true;
+  for (const type of ["A", "AAAA"]) {
+    try { if (((await resolve(host, type)) as string[]).some(privateIp)) return false; } catch { /* sem registro deste tipo, ou consulta indisponível */ }
+  }
   return true;
 }
 
 async function get(url: string, ms: number, max: number): Promise<string | null> {
   try {
-    const u = new URL(url);
-    if (!allowed(u)) return null;
+    let u = new URL(url);
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), ms);
-    const res = await fetch(u.toString(), { signal: ctl.signal, redirect: "follow", headers: { "User-Agent": "Mozilla/5.0 (compatible; FortePortalBot/1.0)", Accept: "text/html,text/css,*/*" } });
+    let res: Response | null = null;
+    // os redirecionamentos são seguidos um a um, conferindo cada destino
+    for (let hop = 0; hop < 5; hop++) {
+      if (!allowed(u) || !(await publicHost(u.hostname))) return null;
+      res = await fetch(u.toString(), { signal: ctl.signal, redirect: "manual", headers: { "User-Agent": "Mozilla/5.0 (compatible; FortePortalBot/1.0)", Accept: "text/html,text/css,*/*" } });
+      const next = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+      if (!next) break;
+      await res.body?.cancel();
+      u = new URL(next, u);
+    }
     clearTimeout(timer);
-    if (!res.ok) return null;
+    if (!res?.ok) return null;
     return (await res.text()).slice(0, max);
   } catch { return null; }
 }

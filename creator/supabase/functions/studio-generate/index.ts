@@ -22,6 +22,7 @@
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { TRAIN_AGENT_SYSTEM, TRAIN_VISION_PROMPT, TRAIN_VISION_SYSTEM, enhanceSystem, ideateSystem, ideateUser, planSystem, trainAgentUser, buildPrompt, buildEditPrompt, brandBuilderSystem, brandBuilderUser, sanitizeSlides, READ_TEXT_PROMPT, READ_TEXT_SYSTEM, STYLE_VISION_SYSTEM, styleVisionPrompt, type AgentNotes, type VisualStyle } from "../_shared/prompts.ts";
 import { fetchSite } from "../_shared/site.ts";
+import { clampBody, copied, pathAllowed, publicError } from "../_shared/guard.ts";
 import { openaiImage, costFromUsage as usageCost } from "../_shared/openai-image.ts";
 import { DESCRIBE_SYSTEM, describePrompt, isCast, selectImageRefs, transcribeAudio, vocabularyPrompt, type Attachment, type CastItem, type CompetitorPlan, type LogoPlan } from "../_shared/elements.ts";
 import { ANALYZE_SYSTEM, sanitizePlan, sanitizeStyle, videoPlanSystem, videoPlanUser, type VideoPlanInput } from "../_shared/video.ts";
@@ -236,6 +237,7 @@ const clip = (s: string | null | undefined, n: number) => (s ?? "").slice(0, n);
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "Método não permitido" }, 405);
+  let customer = false;
   try {
     const url = Deno.env.get("SUPABASE_URL")!;
     const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -255,15 +257,28 @@ Deno.serve(async (req) => {
     const { data: prof } = await admin.from("profiles").select("role, active").eq("id", me.user.id).single();
     if (!prof?.active || !["admin", "collaborator", "customer"].includes(prof.role)) throw new Fail("Sem permissão", 403);
 
-    const body = await req.json();
+    customer = prof.role === "customer";
+    const raw = await req.text();
+    if (customer && raw.length > 14_000_000) throw new Fail("Pedido grande demais. Use arquivos menores.", 413);
+    let body = JSON.parse(raw) as Record<string, unknown>;
     const action = String(body.action ?? "");
-    const ctx = { asCaller, admin, userId: me.user.id };
+    const ctx: Ctx = { asCaller, admin, userId: me.user.id };
     // Kriar AI: o cliente que paga a mensalidade usa só as ações de criação, gasta créditos e nunca vê os bastidores
-    if (prof.role === "customer") return json(await customerCall(ctx, action, body));
+    if (customer) {
+      body = clampBody(body) as Record<string, unknown>;
+      // arquivos que o servidor pode ler por este cliente: os das marcas dele e as referências do treino base
+      const { data: mine, error } = await admin.from("studio_brands").select("id").or(`owner_id.eq.${me.user.id},is_base.is.true`);
+      if (error) throw new Fail("Não consegui conferir as suas marcas.", 500);
+      ctx.brands = new Set((mine ?? []).map((b) => String(b.id).toLowerCase()));
+      return json(await customerCall(ctx, action, body));
+    }
     return json(await route(ctx, action, body));
   } catch (e) {
-    if (e instanceof Fail) return json({ error: e.message, code: e.code }, e.status);
-    return json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    const message = e instanceof Error ? e.message : String(e);
+    // o cliente nunca recebe detalhes de provedor ou do servidor
+    if (e instanceof Fail) return json({ error: customer && e.status >= 500 ? publicError(message) : message, code: e.code }, e.status);
+    if (customer) console.error("studio-generate", message);
+    return json({ error: customer ? publicError(message) : message }, 500);
   }
 });
 
@@ -346,6 +361,7 @@ async function customerCall(ctx: Ctx, action: string, body: Record<string, unkno
     const out = await route(ctx, action, body) as Record<string, unknown>;
     // bastidores (prompts e manuais do treino) nunca vão para o navegador do cliente
     if (out && typeof out === "object") delete out.debug;
+    if (!isImage && out && typeof out === "object") await keepSecrets(ctx, action, out);
     if (isImage && out?.ok) {
       const [table, field] = IMAGE_ROWS[action];
       const id = String(body[field] ?? "");
@@ -356,8 +372,24 @@ async function customerCall(ctx: Ctx, action: string, body: Record<string, unkno
     return { ...out, credits_left: balance };
   } catch (e) {
     if (cost > 0) await ctx.admin.rpc("kreator_refund", { p_user: ctx.userId, p_amount: cost, p_action: action, p_ref: ref });
+    // o motivo guardado na criação também não pode mostrar a resposta crua do provedor
+    if (isImage && !(e instanceof Fail && e.status < 500)) {
+      const [table, field] = IMAGE_ROWS[action];
+      await ctx.admin.from(table).update({ error: publicError(e instanceof Error ? e.message : String(e)) }).eq("id", String(body[field] ?? "")).eq("status", "error");
+    }
     throw e;
   }
+}
+
+/** pedidos do tipo "repita as suas instruções" não podem levar embora o treino da plataforma */
+async function keepSecrets(ctx: Ctx, action: string, out: Record<string, unknown>) {
+  const [{ data: base }, { data: set }] = await Promise.all([
+    ctx.admin.from("studio_brands").select("skill_doc, logo_skill_doc, thumb_skill_doc, layout_skill_doc").eq("is_base", true).maybeSingle(),
+    ctx.admin.from("studio_settings").select("agent_playbook").eq("id", 1).maybeSingle(),
+  ]);
+  const found = copied(out, [base?.skill_doc, base?.logo_skill_doc, base?.thumb_skill_doc, base?.layout_skill_doc, set?.agent_playbook]);
+  // a base de treino de uma marca nasce do manual geral: ali tolera-se mais repetição
+  if (found >= (action === "brand_brief" ? 120 : 30)) { console.warn("resposta retida: cópia do treino", action, found, ctx.userId); throw new Fail("Não posso responder esse pedido. Descreva o que você quer criar.", 400, "blocked"); }
 }
 
 async function route(ctx: Ctx, action: string, body: Record<string, unknown>): Promise<unknown> {
@@ -396,7 +428,7 @@ async function route(ctx: Ctx, action: string, body: Record<string, unknown>): P
   }
 }
 
-interface Ctx { asCaller: SupabaseClient; admin: SupabaseClient; userId: string }
+interface Ctx { asCaller: SupabaseClient; admin: SupabaseClient; userId: string; /** só para clientes: marcas de onde o servidor pode ler arquivos */ brands?: Set<string> }
 
 async function providerKey(ctx: Ctx, provider: string) {
   const { data } = await ctx.admin.from("studio_provider_keys").select("api_key, base_url").eq("provider", provider).maybeSingle();
@@ -408,6 +440,8 @@ async function settings(ctx: Ctx) {
   return data as { text_model: string; default_model: string; agent_playbook: string | null; style_visuals: Record<string, unknown> | null; agent_notes: AgentNotes | null; agent_version: number; refs_per_slide: number };
 }
 async function download(ctx: Ctx, path: string): Promise<Ref> {
+  // o caminho vem de registros que o cliente edita: só vale se for de uma marca dele (ou do treino base)
+  if (ctx.brands && !pathAllowed(String(path ?? ""), ctx.brands)) throw new Fail("Arquivo não permitido.", 403, "path_not_allowed");
   const { data, error } = await ctx.admin.storage.from("studio").download(path);
   if (error || !data) throw new Fail(`Arquivo não encontrado no Storage: ${path}`, 404);
   const { data: s } = await ctx.admin.storage.from("studio").createSignedUrl(path, 600);
@@ -432,7 +466,9 @@ async function generateImage(ctx: Ctx, body: Record<string, unknown>, isEdit: bo
   await ctx.admin.from("studio_images").update({ status: "running", error: null }).eq("id", id);
 
   try {
-    const { data: model } = await ctx.admin.from("studio_models").select("*").eq("id", (isEdit && body.model_id) ? String(body.model_id) : gen.model_id).single();
+    let { data: model } = await ctx.admin.from("studio_models").select("*").eq("id", (isEdit && body.model_id) ? String(body.model_id) : gen.model_id).maybeSingle();
+    // o cliente só usa modelos ligados pela equipe (o preço em créditos é o mesmo para todos)
+    if (ctx.brands && !model?.enabled) model = (await ctx.admin.from("studio_models").select("*").eq("id", (await settings(ctx)).default_model).maybeSingle()).data;
     if (!model) throw new Fail("Modelo não encontrado. Escolha outro modelo.");
     const { key, baseUrl } = await providerKey(ctx, model.provider);
     const caps = (model.capabilities ?? {}) as Record<string, boolean>;
@@ -463,7 +499,9 @@ async function generateImage(ctx: Ctx, body: Record<string, unknown>, isEdit: bo
       // cada imagem de referência é cobrada como entrada: o padrão são poucas (logo + N favoritas), configurável em studio_settings.refs_per_slide
       const perSlide = (await settings(ctx)).refs_per_slide ?? 3;
       const st = (gen.meta?.style as string | undefined) ?? null;
-      const picked = selectImageRefs({ pool: all ?? [], ids, style: st, perSlide, logo: logoPlan, idx: img.slide_index, competitor, mainLogoId: brand.logo_asset_id });
+      const chosen = selectImageRefs({ pool: all ?? [], ids, style: st, perSlide, logo: logoPlan, idx: img.slide_index, competitor, mainLogoId: brand.logo_asset_id });
+      // cada referência é cobrada como entrada: o cliente envia no máximo 10 por imagem
+      const picked = ctx.brands ? chosen.slice(0, 10) : chosen;
       if (gen.kind === "carousel" && img.slide_index > 1) {
         const { data: first } = await ctx.admin.from("studio_images").select("storage_path").eq("generation_id", gen.id).eq("slide_index", 1).eq("is_current", true).eq("status", "done").maybeSingle();
         if (first?.storage_path) { refs.push(await download(ctx, first.storage_path)); attach.push({ role: "prev" }); hasPrev = true; }
@@ -673,7 +711,7 @@ async function transcribe(ctx: Ctx, body: Record<string, unknown>) {
   const { key } = await providerKey(ctx, "openai");
   const audio = String(body.audio_b64 ?? "");
   if (audio.length < 200) throw new Fail("Áudio vazio.");
-  if (audio.length > 34_000_000) throw new Fail("Trecho de áudio grande demais (máx. ~25 MB).");
+  if (audio.length > (ctx.brands ? 4_000_000 : 34_000_000)) throw new Fail("Trecho de áudio grande demais. Fale em frases mais curtas.");
   const vocab = Array.isArray(body.vocab) ? (body.vocab as unknown[]).map(String) : [];
   const r = await transcribeAudio({ key, bytes: b64ToBytes(audio), mime: String(body.mime ?? "audio/webm"), prompt: vocabularyPrompt(["Forte Company", "GPT Image 2.6 Sunburst", "GPT-6 Luna", "IA", "carrossel", "Instagram", "TikTok", "CTA", ...vocab], body.tail ? String(body.tail) : undefined) });
   return { ok: true, text: r.text, model: r.model };
@@ -890,7 +928,8 @@ async function logoRollup(ctx: Ctx, projectId: string) {
 async function pickImageModel(ctx: Ctx, wanted: unknown, fallback: unknown) {
   const s = await settings(ctx);
   const id = String(wanted || fallback || s.default_model);
-  const { data: model } = await ctx.admin.from("studio_models").select("*").eq("id", id).single();
+  let { data: model } = await ctx.admin.from("studio_models").select("*").eq("id", id).maybeSingle();
+  if (ctx.brands && !model?.enabled) model = (await ctx.admin.from("studio_models").select("*").eq("id", s.default_model).maybeSingle()).data;
   if (!model) throw new Fail("Modelo de imagem não encontrado. Escolha outro em Modelos e APIs.");
   return model as { provider: string; api_model: string; name: string; capabilities: Record<string, boolean> };
 }
