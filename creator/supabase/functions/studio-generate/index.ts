@@ -9,7 +9,7 @@
 //   image    gera a imagem de um slide (linha studio_images com status "queued")
 //   edit     edita uma imagem existente com marcadores/máscara (nova versão do slide)
 //   transcribe     ditado por voz: áudio → texto (gpt-4o-transcribe)
-//   route_brief    Kreator AI: em qual criador o pedido da tela inicial entra
+//   route_brief    Kriar AI: em qual criador o pedido da tela inicial entra
 //   describe_asset IA de visão descreve um personagem/objeto enviado (para o gerador reproduzir o mesmo)
 //   video_plan     editor de vídeo (VPS): transcrição + pedido → plano de edição (chamada feita pelo worker com a service role)
 //   video_analyze  editor de vídeo: medições/quadros de uma referência → regras de estilo
@@ -258,7 +258,7 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const action = String(body.action ?? "");
     const ctx = { asCaller, admin, userId: me.user.id };
-    // Kreator AI: o cliente que paga a mensalidade usa só as ações de criação, gasta créditos e nunca vê os bastidores
+    // Kriar AI: o cliente que paga a mensalidade usa só as ações de criação, gasta créditos e nunca vê os bastidores
     if (prof.role === "customer") return json(await customerCall(ctx, action, body));
     return json(await route(ctx, action, body));
   } catch (e) {
@@ -267,7 +267,7 @@ Deno.serve(async (req) => {
   }
 });
 
-// ---------- Kreator AI: permissões e créditos do cliente ----------
+// ---------- Kriar AI: permissões e créditos do cliente ----------
 /** Treinar as ferramentas é só dos administradores: o cliente usa o que foi treinado. */
 const ADMIN_ONLY = new Set(["train_agent", "train_styles", "logo_train", "thumb_observe", "thumb_train", "layout_observe", "layout_train", "video_analyze"]);
 /** Textos com IA: preço fixo menor. Imagens: o preço depende da qualidade. A tabela fica em kreator_settings. */
@@ -300,7 +300,7 @@ async function chargedQuality(ctx: Ctx, action: string, body: Record<string, unk
 }
 
 async function customerCall(ctx: Ctx, action: string, body: Record<string, unknown>) {
-  if (ADMIN_ONLY.has(action)) throw new Fail("O treinamento das ferramentas é exclusivo dos administradores do Kreator AI.", 403, "admin_only");
+  if (ADMIN_ONLY.has(action)) throw new Fail("O treinamento das ferramentas é exclusivo dos administradores do Kriar AI.", 403, "admin_only");
   const isImage = Object.hasOwn(IMAGE_ROWS, action);
   const isText = TEXT_ACTIONS.has(action);
   if (!isImage && !isText && !CUSTOMER_FREE.has(action)) throw new Fail("Ação não disponível no seu plano.", 403);
@@ -525,7 +525,7 @@ async function enhance(ctx: Ctx, body: Record<string, unknown>) {
   return { ok: true, text: (await chat(key, model, sys, String(body.prompt ?? ""))).trim() };
 }
 
-// ---------- Kreator AI: entende o pedido da tela inicial ----------
+// ---------- Kriar AI: entende o pedido da tela inicial ----------
 const BRIEF_CATEGORIES = ["thumb", "logo", "carousel", "static", "layout", "prompts"];
 /** Só decide em qual criador o pedido entra; não gera nada e não gasta crédito. */
 async function routeBrief(ctx: Ctx, body: Record<string, unknown>) {
