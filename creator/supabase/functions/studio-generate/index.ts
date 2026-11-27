@@ -39,6 +39,7 @@ import { AD_OBSERVE_SYSTEM, AD_SYNTH_SYSTEM, adLearned, adObservePrompt, adPlanS
 import { IMPROVE_TOOLS, improveContext, improveSystem, siteSummary, webResearch } from "../_shared/improve.ts";
 import { AD_SKILL } from "../_shared/ad-skill.ts";
 import { SOURCE_KIND, STUDIO_KINDS, STUDIO_LEARN_SYSTEM, baseMemory, buildStudioPrompt, learnUser, learnedMemory, memoryBlock, numbersIn, pickStudioRefs, sanitizeChoice, sanitizeLessons, sanitizeMemory, sanitizePiece, sanitizeRefs, sanitizeSay, saySystem, sayUser, sourceFacts, type StudioAttach, type StudioRef } from "../_shared/studio.ts";
+import { CAPTION_SYSTEM, CAPTION_TONES, sanitizeCaption } from "../_shared/social-caption.ts";
 import { layoutFontsBlock, LAYOUT_ANALYZE_SYSTEM, LAYOUT_CATEGORIES, LAYOUT_OBSERVE_SYSTEM, LAYOUT_SYNTH_SYSTEM, buildMascotPrompt, buildSectionPrompt, buildSectionRefinePrompt, buildSystemBoardPrompt, compileLayoutSkill, computeLayoutStats, layoutAnalyzePrompt, layoutExemplarsBlock, layoutLearnedBlock, layoutObservePrompt, layoutPlanSystem, layoutPlanUser, layoutSynthUser, sanitizeLayoutAnalysis, sanitizeLayoutForm, sanitizeLayoutPlan, sanitizeLayoutSiteAnalysis, sanitizeSiteObs, type LayoutAnalysis, type LayoutAttach, type LayoutObs, type LayoutPagePlan, type LayoutPlan, type LayoutSectionPlan, type LayoutSiteAnalysis } from "../_shared/layout.ts";
 
 const cors = {
@@ -306,7 +307,7 @@ Deno.serve(async (req) => {
 /** Treinar as ferramentas é só dos administradores: o cliente usa o que foi treinado. */
 const ADMIN_ONLY = new Set(["train_agent", "train_styles", "logo_train", "thumb_observe", "thumb_train", "layout_observe", "layout_train", "video_analyze", "ad_observe", "ad_train"]);
 /** Textos com IA: preço fixo menor. Imagens: o preço depende da qualidade. A tabela fica em kreator_settings. */
-const TEXT_ACTIONS = new Set(["thumb_ideate", "logo_ideate", "layout_plan", "ad_plan", "ideate", "plan", "train", "brand_brief", "brand_import", "studio_say"]);
+const TEXT_ACTIONS = new Set(["thumb_ideate", "logo_ideate", "layout_plan", "ad_plan", "ideate", "plan", "train", "brand_brief", "brand_import", "studio_say", "social_caption"]);
 const CUSTOMER_FREE = new Set(["route_brief", "enhance", "read_text", "transcribe", "describe_asset", "logo_inspect", "logo_branding_plan", "layout_analyze", "font_analyze", "studio_create", "studio_learn"]);
 /** ação de imagem → tabela, campo do id e tabela "mãe", que guarda a qualidade escolhida */
 const IMAGE_ROWS: Record<string, [string, string, string]> = {
@@ -468,6 +469,7 @@ async function route(ctx: Ctx, action: string, body: Record<string, unknown>): P
     if (action === "studio_learn") return await studioLearn(ctx, body);
     if (action === "studio_say") return await studioSay(ctx, body);
     if (action === "studio_image") return await studioImage(ctx, body);
+    if (action === "social_caption") return await socialCaption(ctx, body);
     throw new Fail("Ação desconhecida");
   }
 }
@@ -1745,6 +1747,29 @@ async function improveBrief(ctx: Ctx, body: Record<string, unknown>) {
   const out = (await chat(key, model, improveSystem(tool), parts.length ? [{ type: "text", text: user }, ...parts] : user)).trim().replace(/^["“]|["”]$/g, "");
   if (out.length < 10) throw new Fail("Não consegui melhorar o texto agora. Tente de novo.", 502);
   return { ok: true, text: out.slice(0, 5000), sources: found.sources, read_site: !!site, searched: !!found.text };
+}
+
+// ---------- Publicador: legenda e hashtags da publicação ----------
+async function socialCaption(ctx: Ctx, body: Record<string, unknown>) {
+  const about = clip(String(body.about ?? "").trim(), 2500);
+  const brandId = String(body.brand_id ?? "");
+  const { data: brand } = brandId ? await ctx.asCaller.from("studio_brands").select("name, segment, handle, voice, tone_tags, hashtags, cta, is_base").eq("id", brandId).maybeSingle() : { data: null };
+  if (about.length < 3) throw new Fail("Conte em uma frase sobre o que é a publicação.");
+  const { key, model } = await textKey(ctx);
+  const tone = Object.hasOwn(CAPTION_TONES, String(body.tone)) ? String(body.tone) : "natural";
+  const own = brand && !brand.is_base ? [
+    `Empresa: ${brand.name}`, brand.segment ? `Ramo: ${brand.segment}` : "", brand.voice ? `Voz da marca: ${clip(brand.voice, 400)}` : "",
+    brand.tone_tags?.length ? `Tom: ${brand.tone_tags.join(", ")}` : "", brand.cta ? `Chamada preferida: ${brand.cta}` : "",
+    brand.hashtags?.length ? `Hashtags que a marca usa: ${brand.hashtags.slice(0, 12).join(" ")}` : "",
+  ].filter(Boolean).join("\n") : "";
+  const previous = clip(String(body.previous ?? ""), 2000);
+  const user = [`# SOBRE A PUBLICAÇÃO\n${about}`, own ? `# A EMPRESA\n${own}` : "", `# TOM\n${CAPTION_TONES[tone]}`, previous ? `# VERSÃO ANTERIOR (escreva uma bem diferente)\n${previous}` : ""].filter(Boolean).join("\n\n");
+  const out = await chat(key, model, CAPTION_SYSTEM, user, true);
+  let parsed: unknown = null;
+  try { parsed = JSON.parse(out); } catch { /* tratado abaixo */ }
+  const clean = sanitizeCaption(parsed, `${about}\n${own}`);
+  if (clean.caption.length < 10) throw new Fail("Não consegui escrever a legenda agora. Tente de novo.", 502);
+  return { ok: true, ...clean };
 }
 
 // ---------- Studios: uma criação vira um espaço fixo, com memória e pedidos em conversa ----------
