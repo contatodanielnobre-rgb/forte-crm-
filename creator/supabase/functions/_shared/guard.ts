@@ -1,6 +1,8 @@
 // Proteções das chamadas feitas por clientes: arquivos só das próprias marcas, tamanho dos pedidos, mensagens de erro sem
 // detalhes internos e trava contra a IA devolver os manuais de treino da plataforma.
 
+import { issueInMessage } from "./provider-watch.ts";
+
 /** caminho de arquivo bem formado e dentro de uma das marcas permitidas */
 export function pathAllowed(path: string, brands: Set<string>) {
   if (!path || /(\.\.|\/\/|%|\\)/.test(path) || path.startsWith("/")) return false;
@@ -15,8 +17,12 @@ export function clampBody(value: unknown, max = 24_000, depth = 0): unknown {
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 200).map(([k, v]) => [k, k.endsWith("_b64") ? v : clampBody(v, max, depth + 1)]));
 }
 
+/** quando a conta no provedor está sem saldo ou com a chave recusada: o cliente só precisa saber que deve voltar depois */
+export const UNAVAILABLE = "Não consegui criar agora. Tente novamente mais tarde.";
+
 /** o que o cliente pode ler quando algo falha: nunca a resposta crua do provedor */
 export function publicError(message: string) {
+  if (issueInMessage(message)) return UNAVAILABLE;
   if (/safety|moderation|content[_ ]policy|policy_violation|rejected by|not allowed/i.test(message)) return "O pedido foi recusado pelos filtros de segurança. Reescreva sem conteúdo proibido.";
   if (/rate limit|429|overloaded|timeout|timed out/i.test(message)) return "O serviço de imagem está muito ocupado agora. Tente de novo em alguns minutos.";
   return "Não consegui concluir agora. Se algum crédito foi usado, ele voltou. Tente de novo em alguns minutos.";

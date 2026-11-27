@@ -22,7 +22,8 @@
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { TRAIN_AGENT_SYSTEM, TRAIN_VISION_PROMPT, TRAIN_VISION_SYSTEM, enhanceSystem, ideateSystem, ideateUser, planSystem, trainAgentUser, buildPrompt, buildEditPrompt, brandBuilderSystem, brandBuilderUser, sanitizeSlides, READ_TEXT_PROMPT, READ_TEXT_SYSTEM, STYLE_VISION_SYSTEM, styleVisionPrompt, type AgentNotes, type VisualStyle } from "../_shared/prompts.ts";
 import { fetchSite } from "../_shared/site.ts";
-import { clampBody, copied, pathAllowed, publicError } from "../_shared/guard.ts";
+import { clampBody, copied, pathAllowed, publicError, UNAVAILABLE } from "../_shared/guard.ts";
+import { issueInMessage, watchProviders } from "../_shared/provider-watch.ts";
 import { openaiImage, costFromUsage as usageCost } from "../_shared/openai-image.ts";
 import { DESCRIBE_SYSTEM, describePrompt, isCast, selectImageRefs, transcribeAudio, vocabularyPrompt, type Attachment, type CastItem, type CompetitorPlan, type LogoPlan } from "../_shared/elements.ts";
 import { ANALYZE_SYSTEM, sanitizePlan, sanitizeStyle, videoPlanSystem, videoPlanUser, type VideoPlanInput } from "../_shared/video.ts";
@@ -217,6 +218,15 @@ async function runProvider(i: GenInput): Promise<Out> {
   }
 }
 
+// ---------- Kriar AI: aviso quando a conta no provedor fica sem saldo ----------
+{
+  const watcher = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
+  watchProviders({
+    down: async (provider, issue) => { const { error } = await watcher.rpc("kreator_provider_down", { p_provider: provider, p_kind: issue.kind, p_code: issue.code }); if (error) console.warn("aviso de API", error.message); },
+    up: async (provider, startedAt) => { await watcher.rpc("kreator_provider_up", { p_provider: provider, p_started: startedAt }); },
+  });
+}
+
 // ---------- texto (LLM) ----------
 async function chat(key: string, model: string, system: string, user: unknown, jsonMode = false): Promise<string> {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -275,6 +285,8 @@ Deno.serve(async (req) => {
     return json(await route(ctx, action, body));
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
+    // sem saldo ou chave recusada no provedor: o cliente vê “tente mais tarde” (os créditos já voltaram) e o dono é avisado
+    if (issueInMessage(message)) { console.error("studio-generate", message); return json({ error: customer ? UNAVAILABLE : message, code: "provider_down" }, 503); }
     // o cliente nunca recebe detalhes de provedor ou do servidor
     if (e instanceof Fail) return json({ error: customer && e.status >= 500 ? publicError(message) : message, code: e.code }, e.status);
     if (customer) console.error("studio-generate", message);
@@ -433,6 +445,9 @@ interface Ctx { asCaller: SupabaseClient; admin: SupabaseClient; userId: string;
 async function providerKey(ctx: Ctx, provider: string) {
   const { data } = await ctx.admin.from("studio_provider_keys").select("api_key, base_url").eq("provider", provider).maybeSingle();
   if (!data) throw new Fail(`Nenhuma chave de API salva para "${provider}". Cadastre em Modelos e APIs.`, 400, "no_key");
+  // ensaio do aviso: só o usuário marcado no banco recebe uma chave inválida; os demais seguem normais
+  const { data: drill } = await ctx.admin.from("kreator_provider_status").select("test_user").eq("provider", provider).maybeSingle();
+  if (drill?.test_user === ctx.userId) return { key: "sk-ensaio-do-aviso", baseUrl: data.base_url as string | null };
   return { key: await open(data.api_key), baseUrl: data.base_url as string | null };
 }
 async function settings(ctx: Ctx) {
