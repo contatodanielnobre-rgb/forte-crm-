@@ -12,6 +12,7 @@ export const IMPROVE_TOOLS: Record<string, { what: string; guide: string; resear
   carousel: { what: "o pedido de um carrossel para rede social", research: true, guide: "Diga: o tema, o público, os pontos que cada slide deve cobrir e o convite final." },
   static: { what: "o pedido de uma arte única para rede social", research: true, guide: "Diga: a mensagem principal, a oferta informada, o que aparece na imagem e a chamada." },
   layout: { what: "a descrição de um negócio para criar o layout do site", research: true, guide: "Diga: o que o negócio oferece, serviços, público, diferenciais, provas informadas e o objetivo do site." },
+  studio: { what: "um pedido de peça nova dentro de um projeto que já tem identidade", research: false, guide: "Diga: o que muda desta vez (oferta, data, cena, produto), o que deve aparecer e a ação desejada. Não redescreva a identidade do projeto." },
   ideas: { what: "a ideia de conteúdo", research: false, guide: "Organize: o tema, o público, o ponto de vista e o objetivo." },
 };
 

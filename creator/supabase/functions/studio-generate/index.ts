@@ -19,6 +19,7 @@
 //   thumb_observe / thumb_train / thumb_ideate / thumb_image   criador de thumbnails (observar referências, treinar, conceitos a partir do vídeo, imagem)
 //   ad_observe / ad_train / ad_plan / ad_image   criador de anúncios (treino, planejamento das versões, imagem + nota de potencial)
 //   improve_brief  melhora o que a pessoa escreveu (logo, site e pesquisa na internet)
+//   studio_create / studio_learn / studio_say / studio_image   Studios (criação guardada com memória e pedidos em conversa)
 // Provedores: openai, google (Nano Banana / Imagen), fal, ideogram, stability, recraft e custom (compatível com OpenAI).
 // As chaves vêm de studio_provider_keys (nunca passam pelo navegador).
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
@@ -36,6 +37,8 @@ import { buildPhotoMockupPrompt, LOGO_INSPECT_PROMPT, LOGO_INSPECT_SYSTEM, LOGO_
 
 import { AD_OBSERVE_SYSTEM, AD_SYNTH_SYSTEM, adLearned, adObservePrompt, adPlanSystem, adPlanUser, adScoreSystem, adScoreUser, adSynthUser, buildAdAdaptPrompt, buildAdPrompt, buildAdRefinePrompt, buildAdUpscalePrompt, compileAdSkill, nicheOfAd, pickAdRefs, pickModelImages, planPhotos, sanitizeAdAnalysis, sanitizeAdConcepts, sanitizeAdForm, sanitizeAdInputs, sanitizeAdObs, sanitizeScore, type AdAnalysis, type AdAttach, type AdConcept, type AdInput, type AdObs } from "../_shared/ad.ts";
 import { IMPROVE_TOOLS, improveContext, improveSystem, siteSummary, webResearch } from "../_shared/improve.ts";
+import { AD_SKILL } from "../_shared/ad-skill.ts";
+import { SOURCE_KIND, STUDIO_KINDS, STUDIO_LEARN_SYSTEM, baseMemory, buildStudioPrompt, learnUser, learnedMemory, memoryBlock, numbersIn, pickStudioRefs, sanitizeChoice, sanitizeLessons, sanitizeMemory, sanitizePiece, sanitizeRefs, sanitizeSay, saySystem, sayUser, sourceFacts, type StudioAttach, type StudioRef } from "../_shared/studio.ts";
 import { layoutFontsBlock, LAYOUT_ANALYZE_SYSTEM, LAYOUT_CATEGORIES, LAYOUT_OBSERVE_SYSTEM, LAYOUT_SYNTH_SYSTEM, buildMascotPrompt, buildSectionPrompt, buildSectionRefinePrompt, buildSystemBoardPrompt, compileLayoutSkill, computeLayoutStats, layoutAnalyzePrompt, layoutExemplarsBlock, layoutLearnedBlock, layoutObservePrompt, layoutPlanSystem, layoutPlanUser, layoutSynthUser, sanitizeLayoutAnalysis, sanitizeLayoutForm, sanitizeLayoutPlan, sanitizeLayoutSiteAnalysis, sanitizeSiteObs, type LayoutAnalysis, type LayoutAttach, type LayoutObs, type LayoutPagePlan, type LayoutPlan, type LayoutSectionPlan, type LayoutSiteAnalysis } from "../_shared/layout.ts";
 
 const cors = {
@@ -303,14 +306,15 @@ Deno.serve(async (req) => {
 /** Treinar as ferramentas é só dos administradores: o cliente usa o que foi treinado. */
 const ADMIN_ONLY = new Set(["train_agent", "train_styles", "logo_train", "thumb_observe", "thumb_train", "layout_observe", "layout_train", "video_analyze", "ad_observe", "ad_train"]);
 /** Textos com IA: preço fixo menor. Imagens: o preço depende da qualidade. A tabela fica em kreator_settings. */
-const TEXT_ACTIONS = new Set(["thumb_ideate", "logo_ideate", "layout_plan", "ad_plan", "ideate", "plan", "train", "brand_brief", "brand_import"]);
-const CUSTOMER_FREE = new Set(["route_brief", "enhance", "read_text", "transcribe", "describe_asset", "logo_inspect", "logo_branding_plan", "layout_analyze", "font_analyze"]);
+const TEXT_ACTIONS = new Set(["thumb_ideate", "logo_ideate", "layout_plan", "ad_plan", "ideate", "plan", "train", "brand_brief", "brand_import", "studio_say"]);
+const CUSTOMER_FREE = new Set(["route_brief", "enhance", "read_text", "transcribe", "describe_asset", "logo_inspect", "logo_branding_plan", "layout_analyze", "font_analyze", "studio_create", "studio_learn"]);
 /** ação de imagem → tabela, campo do id e tabela "mãe", que guarda a qualidade escolhida */
 const IMAGE_ROWS: Record<string, [string, string, string]> = {
   image: ["studio_images", "image_id", "studio_generations"], edit: ["studio_images", "image_id", "studio_generations"],
   thumb_image: ["thumb_versions", "version_id", "thumb_projects"], logo_image: ["logo_versions", "version_id", "logo_projects"],
   logo_branding_image: ["logo_brandings", "branding_id", "logo_projects"], layout_image: ["layout_sections", "section_id", "layout_projects"],
   ad_image: ["ad_versions", "version_id", "ad_projects"],
+  studio_image: ["project_studio_pieces", "piece_id", "project_studios"],
 };
 const QUALITIES = ["low", "medium", "high", "4k"];
 /** recursos que dependem do plano (kreator_plans.perms) */
@@ -324,7 +328,7 @@ const LOCKED: Record<string, string> = {
 /** Qualidade que será cobrada E usada: o servidor decide e grava no pedido, para o navegador não pagar uma e receber outra. */
 async function chargedQuality(ctx: Ctx, action: string, body: Record<string, unknown>) {
   const [table, field, parent] = IMAGE_ROWS[action];
-  if (table === "ad_versions") {
+  if (table === "ad_versions" || table === "project_studio_pieces") {
     const { data: ad } = await ctx.admin.from(table).select("quality").eq("id", String(body[field] ?? "")).maybeSingle();
     if (!ad) throw new Fail("Item não encontrado.", 404);
     return [...QUALITIES, "draft"].includes(String(ad.quality)) ? String(ad.quality) : "high";
@@ -351,6 +355,8 @@ async function customerCall(ctx: Ctx, action: string, body: Record<string, unkno
   if (tier === "expired") throw new Fail("Seu plano venceu. Renove para voltar a criar.", 402, "plan_expired");
   const need = Object.hasOwn(NEEDS, action) ? NEEDS[action] : null;
   if (need && !perms.includes(need)) throw new Fail(LOCKED[need], 403, "plan_locked");
+  // no Studio a qualidade é escolhida no pedido: o 4K é conferido antes de cobrar o planejamento
+  if (action === "studio_say" && body.quality === "4k" && !perms.includes("4k")) throw new Fail(LOCKED["4k"], 403, "plan_locked");
 
   let cost = 0;
   if (isImage || isText) {
@@ -375,7 +381,7 @@ async function customerCall(ctx: Ctx, action: string, body: Record<string, unkno
     if (ok === false) throw new Fail("Muitos pedidos em pouco tempo. Espere alguns minutos e tente de novo.", 429, "slow_down");
   }
 
-  const ref = `${action}:${String(body.image_id ?? body.version_id ?? body.branding_id ?? body.section_id ?? crypto.randomUUID())}:${Date.now()}`;
+  const ref = `${action}:${String(body.image_id ?? body.version_id ?? body.branding_id ?? body.section_id ?? body.piece_id ?? crypto.randomUUID())}:${Date.now()}`;
   let balance: number | null = null;
   if (cost > 0) {
     const { data, error } = await ctx.admin.rpc("kreator_spend", { p_user: ctx.userId, p_amount: cost, p_action: action, p_ref: ref });
@@ -458,6 +464,10 @@ async function route(ctx: Ctx, action: string, body: Record<string, unknown>): P
     if (action === "ad_plan") return await adPlan(ctx, body);
     if (action === "ad_image") return await adImage(ctx, body);
     if (action === "improve_brief") return await improveBrief(ctx, body);
+    if (action === "studio_create") return await studioCreate(ctx, body);
+    if (action === "studio_learn") return await studioLearn(ctx, body);
+    if (action === "studio_say") return await studioSay(ctx, body);
+    if (action === "studio_image") return await studioImage(ctx, body);
     throw new Fail("Ação desconhecida");
   }
 }
@@ -1735,4 +1745,244 @@ async function improveBrief(ctx: Ctx, body: Record<string, unknown>) {
   const out = (await chat(key, model, improveSystem(tool), parts.length ? [{ type: "text", text: user }, ...parts] : user)).trim().replace(/^["“]|["”]$/g, "");
   if (out.length < 10) throw new Fail("Não consegui melhorar o texto agora. Tente de novo.", 502);
   return { ok: true, text: out.slice(0, 5000), sources: found.sources, read_site: !!site, searched: !!found.text };
+}
+
+// ---------- Studios: uma criação vira um espaço fixo, com memória e pedidos em conversa ----------
+// deno-lint-ignore no-explicit-any
+type Row = Record<string, any>;
+
+async function studioCtx(ctx: Ctx, studioId: string) {
+  const { data: studio } = await ctx.asCaller.from("project_studios").select("*").eq("id", studioId).single();
+  if (!studio) throw new Fail("Studio não encontrado ou sem permissão.", 404);
+  const { data: brand } = await ctx.asCaller.from("studio_brands").select("id, name, is_base").eq("id", studio.brand_id).single();
+  if (!brand) throw new Fail("Empresa não encontrada.", 404);
+  return { studio: studio as Row, brand };
+}
+
+/** o que existe na criação de origem: artes prontas, arquivos enviados e o que a pessoa respondeu */
+async function studioSource(ctx: Ctx, source: string, id: string) {
+  type SourceFile = { path: string; role: string; label?: string };
+  const files: SourceFile[] = []; let arts: { id: string; path: string; format: string; favorite: boolean }[] = [];
+  let brandId = "", name = "", modelId: string | null = null, format = "4:5"; let data: Row = {};
+  if (source === "ads") {
+    const { data: p } = await ctx.asCaller.from("ad_projects").select("*").eq("id", id).single();
+    if (!p) throw new Fail("Anúncio não encontrado ou sem permissão.", 404);
+    const { data: vs } = await ctx.asCaller.from("ad_versions").select("id, storage_path, format, favorite").eq("project_id", id).eq("status", "done").order("created_at");
+    brandId = p.brand_id; name = String(p.form?.company || p.name); modelId = p.model_id; data = { form: p.form };
+    arts = ((vs ?? []) as Row[]).map((v) => ({ id: v.id, path: v.storage_path, format: v.format, favorite: !!v.favorite }));
+    for (const i of sanitizeAdInputs(p.inputs)) if (["logo", "partner", "product", "person", "place"].includes(i.role)) files.push({ path: i.path, role: i.role, label: i.label });
+  } else if (source === "thumb") {
+    const { data: p } = await ctx.asCaller.from("thumb_projects").select("*").eq("id", id).single();
+    if (!p) throw new Fail("Thumbnail não encontrada ou sem permissão.", 404);
+    const { data: vs } = await ctx.asCaller.from("thumb_versions").select("id, storage_path, favorite").eq("project_id", id).eq("status", "done").order("created_at");
+    brandId = p.brand_id; name = String(p.name || p.form?.title || "Thumbnail"); modelId = p.model_id; format = "16:9"; data = { form: p.form };
+    arts = ((vs ?? []) as Row[]).map((v) => ({ id: v.id, path: v.storage_path, format: "16:9", favorite: !!v.favorite }));
+    const cast = (Array.isArray(p.form?.cast) ? p.form.cast : []).map((c: Row) => String(c.id)).slice(0, 3);
+    if (cast.length) {
+      const { data: people } = await ctx.admin.from("studio_assets").select("label, storage_path, meta").in("id", cast).eq("brand_id", brandId);
+      for (const a of (people ?? []) as Row[]) files.push({ path: String(a.meta?.face_path || a.storage_path), role: "person", label: a.label ?? undefined });
+    }
+  } else {
+    const { data: g } = await ctx.asCaller.from("studio_generations").select("*").eq("id", id).single();
+    if (!g || g.kind !== source) throw new Fail("Criação não encontrada ou sem permissão.", 404);
+    const { data: rows } = await ctx.asCaller.from("studio_images").select("id, storage_path, slide_index, slide_text, ref_asset_ids").eq("generation_id", id).eq("status", "done").eq("is_current", true).order("slide_index");
+    const im = (rows ?? []) as Row[];
+    brandId = g.brand_id; name = String(g.meta?.idea || g.input_text || im[0]?.slide_text || "Criativo").split("\n")[0]; modelId = g.model_id; format = g.aspect;
+    arts = im.map((v) => ({ id: v.id, path: v.storage_path, format: g.aspect, favorite: false }));
+    data = { idea: g.meta?.idea || g.input_text, caption: g.caption, slides: im.map((v) => v.slide_text) };
+    const used = [...new Set(im.flatMap((v) => (v.ref_asset_ids ?? []) as string[]))].slice(0, 12);
+    if (used.length) {
+      const { data: cast } = await ctx.admin.from("studio_assets").select("kind, label, storage_path").in("id", used).eq("brand_id", brandId).in("kind", ["character", "object"]).limit(3);
+      for (const a of (cast ?? []) as Row[]) files.push({ path: a.storage_path, role: a.kind === "character" ? "person" : "product", label: a.label ?? undefined });
+    }
+  }
+  const { data: brand } = await ctx.asCaller.from("studio_brands").select("id, name, is_base, colors, logo_asset_id").eq("id", brandId).single();
+  if (!brand) throw new Fail("Empresa não encontrada.", 404);
+  if (!files.some((f) => f.role === "logo") && !brand.is_base && brand.logo_asset_id) {
+    const { data: logo } = await ctx.admin.from("studio_assets").select("storage_path").eq("id", brand.logo_asset_id).eq("brand_id", brandId).maybeSingle();
+    if (logo) files.unshift({ path: logo.storage_path, role: "logo" });
+  }
+  return { brand, name: name.trim().slice(0, 60), modelId, format, data, arts: arts.filter((a) => a.path), files };
+}
+
+/** a IA olha as artes aprovadas e escreve a ficha (sem ela, o Studio nasce só com o que a pessoa respondeu) */
+async function studioStudy(ctx: Ctx, name: string, source: string, data: Row, artPaths: string[]) {
+  const facts = sourceFacts(source, data);
+  const base = baseMemory(name, facts);
+  const { key, model } = await textKey(ctx);
+  const imgs: unknown[] = [];
+  for (const p of artPaths.slice(0, 5)) { try { imgs.push(imgPart(await download(ctx, p), "low")); } catch (e) { if (e instanceof Fail && e.status === 403) throw e; } }
+  const out = await chat(key, model, STUDIO_LEARN_SYSTEM, [{ type: "text", text: learnUser(name, facts, imgs.length) }, ...imgs], true);
+  let parsed: unknown; try { parsed = JSON.parse(out); } catch { throw new Fail("A IA devolveu uma análise fora do formato. Tente de novo.", 502); }
+  return learnedMemory(parsed, base);
+}
+
+async function studioCreate(ctx: Ctx, body: Record<string, unknown>) {
+  const source = String(body.source_kind ?? ""), sourceId = String(body.source_id ?? "");
+  if (!Object.hasOwn(SOURCE_KIND, source) || !/^[0-9a-f-]{36}$/i.test(sourceId)) throw new Fail("Escolha uma criação para guardar.");
+  const src = await studioSource(ctx, source, sourceId);
+  const { data: had } = await ctx.asCaller.from("project_studios").select("id").eq("source_id", sourceId).maybeSingle();
+  if (had) return { ok: true, studio_id: had.id, existed: true };
+  const { data: quota, error: qe } = await ctx.admin.rpc("kreator_studio_quota", { p_user: ctx.userId });
+  if (qe || !quota) throw new Fail(qe?.message ?? "Não consegui conferir o seu plano.", 500);
+  if (quota.max !== null && quota.used >= quota.max) {
+    throw new Fail(quota.max === 0 ? "Os Studios fazem parte dos planos pagos. Escolha um plano para guardar este projeto." : `Seu plano guarda até ${quota.max} Studios. Apague um que não usa mais ou troque de plano.`, 403, "studio_limit");
+  }
+  const wanted = (Array.isArray(body.art_ids) ? body.art_ids : []).map(String);
+  const chosen = (wanted.length ? src.arts.filter((a) => wanted.includes(a.id)) : [...src.arts].sort((a, b) => Number(b.favorite) - Number(a.favorite))).slice(0, 8);
+  if (!chosen.length) throw new Fail("Escolha pelo menos uma arte pronta para o Studio aprender.");
+  const brandId = String(src.brand.id), id = crypto.randomUUID();
+  const asked = clip(String(body.name ?? "").replace(/\s+/g, " ").trim().replace(/^studio\s+/i, ""), 60);
+
+  // as imagens são copiadas para o Studio: apagar a criação de origem não apaga a memória dele
+  const refs: StudioRef[] = []; let n = 0;
+  const copy = async (path: string, role: string, label?: string) => {
+    if (!path.startsWith(`${brandId}/`) || /(\.\.|\/\/|%|\\)/.test(path)) return;
+    const ext = (/\.(png|jpe?g|webp)$/i.exec(path)?.[1] ?? "png").toLowerCase();
+    const to = `${brandId}/studios/${id}/r/${++n}.${ext}`;
+    const { error } = await ctx.admin.storage.from("studio").copy(path, to);
+    if (!error) refs.push({ path: to, role, ...(label ? { label: label.slice(0, 80) } : {}) });
+  };
+  for (const f of src.files.filter((x) => /\.(png|jpe?g|webp)$/i.test(x.path)).slice(0, 10)) await copy(f.path, f.role, f.label);
+  for (const a of chosen) await copy(a.path, "art");
+  const arts = refs.filter((r) => r.role === "art");
+  if (!arts.length) { if (refs.length) await ctx.admin.storage.from("studio").remove(refs.map((r) => r.path)); throw new Fail("Não consegui guardar as artes. Tente de novo.", 500); }
+
+  const baseName = asked || src.name || "Projeto";
+  const data: Row = source === "static" || source === "carousel" ? { ...src.data, colors: src.brand.colors } : src.data;
+  let memory = baseMemory(baseName, sourceFacts(source, data)); let learned = false; let suggested = "";
+  try { const r = await studioStudy(ctx, baseName, source, data, arts.map((a) => a.path)); memory = r.memory; suggested = r.name; learned = true; }
+  catch (e) {
+    if (e instanceof Fail && e.status === 403) throw e;
+    console.warn("studio: a ficha pela IA ficou para depois", (e instanceof Error ? e.message : String(e)).slice(0, 200));
+  }
+  const kind = SOURCE_KIND[source];
+  const { error } = await ctx.admin.rpc("kreator_studio_insert", { p_user: ctx.userId, p_row: {
+    id, brand_id: brandId, name: asked || suggested || baseName, source_kind: source, source_id: sourceId, memory, refs, learned,
+    kind, format: sanitizeChoice(kind, chosen[0]?.format ?? src.format, 1).format, model_id: src.modelId,
+  } });
+  if (error) {
+    await ctx.admin.storage.from("studio").remove(refs.map((r) => r.path));
+    if (/studio_limit/.test(error.message)) throw new Fail("Você chegou ao limite de Studios do seu plano.", 403, "studio_limit");
+    if (/duplicate key/.test(error.message)) { const { data: other } = await ctx.asCaller.from("project_studios").select("id").eq("source_id", sourceId).maybeSingle(); if (other) return { ok: true, studio_id: other.id, existed: true }; }
+    console.error("studio_create", error.message);
+    throw new Fail("Não consegui criar o Studio.", 500);
+  }
+  return { ok: true, studio_id: id, learned };
+}
+
+/** "Aprender de novo": relê as artes que estão no Studio, sem perder o que a pessoa ensinou */
+async function studioLearn(ctx: Ctx, body: Record<string, unknown>) {
+  const { studio, brand } = await studioCtx(ctx, String(body.studio_id ?? ""));
+  const arts = sanitizeRefs(studio.refs, brand.id).filter((r) => r.role === "art");
+  if (!arts.length) throw new Fail("Este Studio não tem artes de referência.");
+  const old = sanitizeMemory(studio.memory);
+  const latest = [...new Set([arts[0], ...arts.slice().reverse()])].slice(0, 5).map((r) => r.path);
+  const r = await studioStudy(ctx, studio.name, "static", { idea: old.summary, caption: "", slides: [], colors: old.colors }, latest);
+  const memory = sanitizeMemory({ ...r.memory, what: r.memory.what || old.what, facts: [...new Set([...old.facts, ...r.memory.facts])], avoid: [...new Set([...old.avoid, ...r.memory.avoid])] });
+  await ctx.admin.from("project_studios").update({ memory, learned: true }).eq("id", studio.id);
+  return { ok: true, memory };
+}
+
+/** um pedido em conversa vira as peças planejadas (as imagens são geradas depois, uma a uma) */
+async function studioSay(ctx: Ctx, body: Record<string, unknown>) {
+  const { key, model } = await textKey(ctx);
+  const { studio, brand } = await studioCtx(ctx, String(body.studio_id ?? ""));
+  const request = clip(String(body.text ?? "").trim(), 2000);
+  if (request.length < 3) throw new Fail("Escreva o que você quer criar.");
+  let target: Row | null = null;
+  if (body.target_id) {
+    const { data } = await ctx.asCaller.from("project_studio_pieces").select("*").eq("id", String(body.target_id)).eq("studio_id", studio.id).maybeSingle();
+    if (!data?.storage_path) throw new Fail("A peça que você quer ajustar não foi encontrada.", 404);
+    target = data as Row;
+  }
+  const choice = target ? { kind: String(target.kind), format: String(target.format), count: 1 } : sanitizeChoice(body.kind, body.format, body.count);
+  const quality = ["draft", "high", "4k"].includes(String(body.quality)) ? String(body.quality) : "high";
+  // imagens enviadas junto: só da própria empresa
+  const sent: StudioRef[] = (Array.isArray(body.inputs) ? body.inputs : []).slice(0, 3).map((x) => x as Row)
+    .map((x) => ({ path: String(x?.path ?? ""), role: "new", ...(x?.label ? { label: clip(String(x.label), 80) } : {}) }))
+    .filter((x) => x.path.startsWith(`${brand.id}/`) && !/(\.\.|\/\/|%|\\)/.test(x.path));
+
+  const refs = sanitizeRefs(studio.refs, brand.id);
+  const memory = sanitizeMemory(studio.memory), lessons = sanitizeLessons(studio.lessons);
+  const { data: turnRows } = await ctx.admin.from("project_studio_turns").select("id, request, reply").eq("studio_id", studio.id).order("created_at", { ascending: false }).limit(6);
+  const turns = (turnRows ?? []) as Row[];
+  const { data: made } = turns.length ? await ctx.admin.from("project_studio_pieces").select("turn_id, plan").in("turn_id", turns.map((t) => t.id)).order("position") : { data: [] };
+  const history = turns.slice().reverse().map((t) => ({ request: clip(t.request, 500), reply: clip(t.reply, 300), pieces: ((made ?? []) as Row[]).filter((p) => p.turn_id === t.id).map((p) => { const x = sanitizePiece(p.plan); return [x.title, x.headline].filter(Boolean).join(": "); }).slice(0, 8) }));
+
+  const { data: base } = await ctx.admin.from("studio_brands").select("skill_doc, thumb_skill_doc, ad_skill_doc").eq("is_base", true).maybeSingle();
+  const skill = choice.kind === "ad" ? [AD_SKILL, base?.ad_skill_doc].filter(Boolean).join("\n\n") : choice.kind === "thumb" ? base?.thumb_skill_doc : base?.skill_doc;
+  const content: unknown[] = [];
+  const arts = refs.filter((r) => r.role === "art");
+  const look: StudioRef[] = target ? [{ path: String(target.storage_path), role: "parent" }] : [...new Set([arts[0], ...arts.slice().reverse()].filter(Boolean))].slice(0, 3);
+  for (const a of look) { try { content.push({ type: "text", text: a.role === "parent" ? "PEÇA ATUAL" : "ARTE APROVADA" }, imgPart(await download(ctx, a.path), "low")); } catch (e) { if (e instanceof Fail && e.status === 403) throw e; } }
+  for (let i = 0; i < sent.length; i++) { try { content.push({ type: "text", text: `IMAGEM ENVIADA ${i + 1}` }, imgPart(await download(ctx, sent[i].path), "low")); } catch (e) { if (e instanceof Fail && e.status === 403) throw e; } }
+  const targetPlan = target ? sanitizePiece(target.plan) : null;
+  const user = sayUser({ block: memoryBlock(studio.name, memory, lessons), history, request, target: targetPlan, attachments: sent.map((s) => s.label || "imagem nova"), kind: choice.kind, format: choice.format });
+  const out = await chat(key, model, saySystem({ name: studio.name, kind: choice.kind, count: choice.count, refine: !!target, skill }), [{ type: "text", text: user }, ...content], true);
+  let parsed: unknown; try { parsed = JSON.parse(out); } catch { throw new Fail("A IA devolveu uma resposta fora do formato. Tente de novo.", 502); }
+  const known = numbersIn([request, ...memory.facts, memory.summary, ...lessons.map((l) => l.text), ...history.map((h) => `${h.request} ${h.pieces.join(" ")}`), targetPlan ? JSON.stringify(targetPlan) : ""].join(" "));
+  const r = sanitizeSay(parsed, { count: choice.count, known, target: targetPlan });
+  if (!r.pieces.length) throw new Fail("A IA não montou a peça. Conte com mais detalhes o que você quer.", 502);
+
+  // preferências declaradas ficam aprendidas (a pessoa vê e pode apagar)
+  const fresh = r.remember.filter((m) => !lessons.some((l) => l.text.toLowerCase() === m.text.toLowerCase())).map((m) => ({ id: crypto.randomUUID().slice(0, 8), ...m }));
+  const { data: turn, error } = await ctx.admin.from("project_studio_turns").insert({
+    studio_id: studio.id, brand_id: brand.id, created_by: ctx.userId, request, reply: r.reply, remembered: fresh, kind: choice.kind, format: choice.format, count: r.pieces.length, quality, inputs: sent, target_id: target?.id ?? null,
+  }).select("id").single();
+  if (error || !turn) throw new Fail("Não consegui guardar o pedido.", 500);
+  const { data: pieces, error: pe } = await ctx.admin.from("project_studio_pieces").insert(r.pieces.map((p, i) => ({
+    studio_id: studio.id, turn_id: turn.id, brand_id: brand.id, parent_id: target?.id ?? null, kind: choice.kind, format: choice.format, position: i + 1, quality, plan: p,
+  }))).select("id, position");
+  if (pe) { await ctx.admin.from("project_studio_turns").delete().eq("id", turn.id); throw new Fail("Não consegui preparar as peças.", 500); }
+  await ctx.admin.from("project_studios").update({ lessons: sanitizeLessons([...lessons, ...fresh]), ...(target ? {} : { kind: choice.kind, format: choice.format }), quality, updated_at: new Date().toISOString() }).eq("id", studio.id);
+  return { ok: true, turn_id: turn.id, reply: r.reply, pieces: pieces ?? [] };
+}
+
+async function studioImage(ctx: Ctx, body: Record<string, unknown>) {
+  const id = String(body.piece_id ?? "");
+  const { data: piece } = await ctx.asCaller.from("project_studio_pieces").select("*").eq("id", id).single();
+  if (!piece) throw new Fail("Peça não encontrada ou sem permissão.", 404);
+  if (piece.status === "done") throw new Fail("Esta peça já foi criada.", 409);
+  await ctx.admin.from("project_studio_pieces").update({ status: "running", error: null }).eq("id", id);
+  try {
+    const { studio, brand } = await studioCtx(ctx, piece.studio_id);
+    const { data: turn } = await ctx.admin.from("project_studio_turns").select("request, inputs, count").eq("id", piece.turn_id).single();
+    if (!turn) throw new Fail("O pedido desta peça não foi encontrado.", 404);
+    const model = await pickImageModel(ctx, body.model_id, studio.model_id);
+    if (!model.capabilities?.refs) throw new Fail(`${model.name} não aceita imagem de referência, necessária para manter o estilo. Escolha um modelo OpenAI/Gemini.`);
+    const { key, baseUrl } = await providerKey(ctx, model.provider);
+    const kind = Object.hasOwn(STUDIO_KINDS, piece.kind) ? String(piece.kind) : "ad";
+    const draft = piece.quality === "draft";
+    const refine = !!piece.parent_id;
+    const refs: Ref[] = []; const attach: StudioAttach[] = [];
+    const add = async (path: string, a: StudioAttach) => { try { refs.push(await download(ctx, path)); attach.push(a); } catch (e) { if (e instanceof Fail && e.status === 403) throw e; } };
+    if (refine) {
+      const { data: parent } = await ctx.asCaller.from("project_studio_pieces").select("storage_path").eq("id", piece.parent_id).single();
+      if (!parent?.storage_path) throw new Fail("A peça original não foi encontrada.");
+      await add(parent.storage_path, { role: "parent" });
+    } else if (kind === "carousel" && piece.position > 1) {
+      // os outros slides nascem olhando a capa, para o carrossel ficar igual do começo ao fim
+      const { data: first } = await ctx.admin.from("project_studio_pieces").select("storage_path").eq("turn_id", piece.turn_id).eq("position", 1).eq("status", "done").maybeSingle();
+      if (first?.storage_path) await add(first.storage_path, { role: "first" });
+    }
+    const inputs: StudioRef[] = (Array.isArray(turn.inputs) ? turn.inputs : []).map((x: Row) => ({ path: String(x.path), role: "new", label: x.label ? String(x.label) : undefined })).filter((x: StudioRef) => x.path.startsWith(`${brand.id}/`));
+    for (const r of pickStudioRefs({ refs: sanitizeRefs(studio.refs, brand.id), inputs, quality: String(piece.quality), refine, hasBase: attach.length > 0 })) await add(r.path, { role: r.role, label: r.label });
+    if (!refs.length) throw new Fail("As artes deste Studio não foram encontradas.", 404);
+    const prompt = buildStudioPrompt({
+      name: studio.name, memory: sanitizeMemory(studio.memory), lessons: sanitizeLessons(studio.lessons), piece: sanitizePiece(piece.plan), kind, format: piece.format,
+      position: piece.position, total: Number(turn.count ?? 1), attach, request: clip(turn.request, 800), refine,
+    });
+    const raw = await runProvider({ provider: model.provider, apiModel: model.api_model, key, baseUrl, prompt, aspect: piece.format, quality: draft ? "low" : String(piece.quality), refs, small: draft });
+    const fin = await finalize(raw.bytes, piece.format);
+    const path = `${brand.id}/studios/${studio.id}/p/${piece.id}.png`;
+    const up = await ctx.admin.storage.from("studio").upload(path, fin.bytes, { contentType: "image/png", upsert: true });
+    if (up.error) throw new Fail(`Falha ao salvar a imagem: ${up.error.message}`, 500);
+    await ctx.admin.from("project_studio_pieces").update({ status: "done", storage_path: path, width: fin.w ?? null, height: fin.h ?? null, prompt: prompt.slice(0, 20000), usage: raw.usage ?? null, cost_usd: costFromUsage(model.provider, raw.usage) }).eq("id", id);
+    await ctx.admin.from("project_studios").update({ updated_at: new Date().toISOString() }).eq("id", studio.id);
+    return { ok: true, path, attached: attach.map((a) => a.role) };
+  } catch (e) {
+    await ctx.admin.from("project_studio_pieces").update({ status: "error", error: (e instanceof Error ? e.message : String(e)).slice(0, 600) }).eq("id", id);
+    throw e;
+  }
 }
