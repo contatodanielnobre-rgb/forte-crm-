@@ -220,7 +220,7 @@ export function brandBuilderSystem(o: { baseDoc?: string | null; notes?: AgentNo
   ].filter(Boolean).join("\n\n");
 }
 
-export interface SiteSummary { url: string; title: string; description: string; text: string; colors: string[]; fonts: string[] }
+export interface SiteSummary { url: string; title: string; description: string; text: string; colors: string[]; fonts: string[]; buttons?: string[] }
 export function brandBuilderUser(o: { name: string; website?: string | null; segment?: string | null; handle?: string | null; brief: { about?: string; products?: string; goal?: string; audience?: string; differentiators?: string }; site?: SiteSummary | null }): string {
   const b = o.brief ?? {};
   return [

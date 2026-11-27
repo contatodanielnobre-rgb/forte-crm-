@@ -369,5 +369,29 @@ ${o.extra ? `- Regras extras da agência: ${o.extra}` : ""}
 ${o.feedback ? `\n## AJUSTE PEDIDO PELO USUÁRIO\n${o.feedback}` : ""}`.trim();
 }
 
+/** Mockup em cima de uma foto de verdade do cliente (fachada, funcionário, veículo, loja, produto) */
+export function buildPhotoMockupPrompt(o: { scene: { title: string; scene: string; aspect: string; variant: string }; company: string; segment: string; palette: string[]; logoDescription?: string | null; extra?: string | null; feedback?: string | null }): string {
+  return `# TAREFA: APLICAR A LOGO NA FOTO REAL DO CLIENTE
+Imagem 1: foto REAL enviada pela empresa "${o.company}"${o.segment ? ` (${o.segment})` : ""}. Imagem 2: a logo APROVADA da empresa.
+Edite a imagem 1 para mostrar como ficaria a marca aplicada nela.
+
+## APLICAÇÃO: ${o.scene.title}
+${o.scene.scene}
+
+## O QUE NÃO PODE MUDAR (é a foto de verdade do cliente)
+- A mesma pessoa: rosto, cabelo, corpo, expressão e pose idênticos.
+- O mesmo lugar, veículo ou produto: arquitetura, formato, enquadramento, perspectiva, fundo, luz e pessoas ao redor.
+- Não redesenhe a cena, não troque o modelo do veículo, não invente andares, vitrines ou objetos.
+
+## COMO APLICAR A LOGO
+- Reproduza a logo EXATAMENTE como na imagem 2: mesmas letras, símbolo, proporções e cores (use a versão em uma cor só apenas se for preciso para ler).
+- Aplicação fisicamente plausível: bordado ou estampa no tecido seguindo as dobras; letreiro com material, espessura e sombra; adesivo acompanhando a lataria.
+- Quando fizer parte natural da aplicação, as cores da marca podem entrar na peça (uniforme, pintura da fachada, adesivagem)${o.palette.length ? `: ${o.palette.join(", ")}` : ""}.
+- Nenhum outro texto ou marca nova. Placas, rostos e dados que já existiam continuam como estavam.
+${o.logoDescription ? `- Sobre a logo: ${o.logoDescription}` : ""}
+${o.extra ? `- Regras extras da agência: ${o.extra}` : ""}
+${o.feedback ? `\n## AJUSTE PEDIDO PELO USUÁRIO\n${o.feedback}` : ""}`.trim();
+}
+
 /** Estima o custo da etapa de texto (em tokens aproximados) — usado só para exibir ordem de grandeza */
 export const approxTokens = (s: string) => Math.ceil(s.length / 3.6);

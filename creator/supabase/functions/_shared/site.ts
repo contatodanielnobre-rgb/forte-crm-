@@ -101,5 +101,12 @@ export async function fetchSite(raw: string): Promise<SiteSummary | null> {
 
   // texto visível
   const text = html.replace(/<(script|style|noscript|svg|template)[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim().slice(0, 6000);
-  return { url, title, description, text, colors, fonts };
+  // cores dos botões: regras de CSS cujo seletor fala em botão (a chamada para ação costuma usar essas)
+  const buttons: string[] = [];
+  for (const m of css.matchAll(/([^{}]*(?:button|\.btn|\.cta|\[type=["']?submit)[^{}]*)\{([^}]*)\}/gi)) {
+    const bg = /background(?:-color)?\s*:\s*[^;]*?(#[0-9a-fA-F]{6})/i.exec(m[2])?.[1]?.toUpperCase();
+    if (bg && !isNeutral(bg) && !buttons.includes(bg)) buttons.push(bg);
+    if (buttons.length >= 4) break;
+  }
+  return { url, title, description, text, colors, fonts, buttons };
 }

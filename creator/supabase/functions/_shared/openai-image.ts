@@ -5,6 +5,8 @@ export interface ImgRef { name: string; mime: string; bytes: Uint8Array }
 export interface OpenAIImageInput {
   key: string; base?: string; model: string; prompt: string; aspect: string; quality: string
   refs: ImgRef[]; edit?: { image: ImgRef; mask?: ImgRef }
+  /** rascunho de teste: tela menor (lado curto 832 px), que custa bem menos */
+  small?: boolean
 }
 export interface OpenAIUsage { input_tokens?: number; output_tokens?: number; input_tokens_details?: { text_tokens?: number; image_tokens?: number } }
 
@@ -19,10 +21,10 @@ export function legacySize(aspect: string): string {
   return LEGACY.map((o) => { const [x, y] = o.split("x").map(Number); return { o, d: Math.abs(Math.log(x / y / r)) }; }).sort((a, b) => a.d - b.d)[0].o;
 }
 /** Família GPT Image 2.x aceita tamanhos livres (múltiplos de 16, proporção até 3:1). O lado menor fica em 1024 px: 4:5 vira 1024×1280. */
-export function customSize(aspect: string): string {
+export function customSize(aspect: string, short = 1024): string {
   let [w, h] = parseAspect(aspect);
   const r = Math.min(3, Math.max(1 / 3, w / h));
-  [w, h] = r >= 1 ? [1024 * r, 1024] : [1024, 1024 / r];
+  [w, h] = r >= 1 ? [short * r, short] : [short, short / r];
   const q = (n: number) => Math.min(3840, Math.max(256, Math.round(n / 16) * 16));
   return `${q(w)}x${q(h)}`;
 }
@@ -67,7 +69,7 @@ function fromB64(s: string) {
 export async function openaiImage(i: OpenAIImageInput): Promise<{ bytes: Uint8Array; usage: OpenAIUsage | null; size: string }> {
   const ultra = i.quality === "4k";
   if (ultra && !isFlexible(i.model)) throw new Error("Este modelo não gera em 4K.");
-  let size = ultra ? ultraSize(i.aspect) : isFlexible(i.model) ? customSize(i.aspect) : legacySize(i.aspect);
+  let size = ultra ? ultraSize(i.aspect) : isFlexible(i.model) ? customSize(i.aspect, i.small ? 832 : 1024) : legacySize(i.aspect);
   let res = await send(i, size);
   // se a API recusar o tamanho livre, tenta de novo com os tamanhos clássicos (no 4K não: quem pediu 4K não recebe menor)
   if (!ultra && !res.ok && res.status === 400 && size !== legacySize(i.aspect)) {
